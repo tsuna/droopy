@@ -17,8 +17,8 @@ import com.google.gwt.core.client.JsArray;
 import com.google.gwt.core.client.Scheduler;
 import com.google.gwt.i18n.client.NumberFormat;
 import com.google.gwt.json.client.JSONObject;
-import com.google.gwt.user.client.ui.Widget;
 import com.google.gwt.user.client.ui.TreeItem;
+import com.google.gwt.user.client.ui.Widget;
 
 /**
  * JavaScript overlay for Droopy traces.
@@ -87,6 +87,7 @@ public final class Trace extends JavaScriptObject {
         super.addRow("Response size: ", respSize() + " bytes");
       }
 
+      // Time spent doing system calls.
       {
         // First compute the total amount of time spent doing system calls.
         double syscalls_times = 0;
@@ -122,6 +123,29 @@ public final class Trace extends JavaScriptObject {
                               percent(syscalls_times, summary.endToEnd())
                               + " of total time"));
         super.addItem(timings);
+      }
+
+      // Slowest system call.
+      {
+        final Syscall slowest = summary.slowestSyscall();
+        final TreeItem tree = new TreeItem();
+        tree.setWidget(row("Slowest syscall:", slowest.name(), fmt(slowest.duration())));
+        tree.addItem(new FixedWidth(slowest.call()));
+        if (summary.hasSlowBackend()) {
+          final ConnectCall connect = summary.prevConnect();
+          final TreeItem item = new TreeItem(row("This FD is connected to",
+                                                 summary.slowestBackend()));
+          if (connect.call() != null) {
+            item.addItem(new FixedWidth(connect.call()));
+          }
+          tree.addItem(item);
+        }
+        if (summary.hasPrevSlowest()) {
+          final Syscall prev = summary.prevSlowest();
+          tree.addItem(row("Previous call on that FD", fmt(prev.duration())));
+          tree.addItem(new FixedWidth(prev.call()));
+        }
+        super.addItem(tree);
       }
     }
 

@@ -25,6 +25,7 @@ viewer_JAVA = \
 	viewer/DateTimeBox.java	\
 	viewer/ESResponse.java	\
 	viewer/EventsHandler.java	\
+	viewer/FixedWidth.java	\
 	viewer/HBox.java	\
 	viewer/JsArrayIterator.java	\
 	viewer/Json.java	\
