@@ -8,3 +8,9 @@ Droopy was designed to work on PHP applications running under Apache, but
 it also works on any other application server that uses the pathetic "one
 process per connection" or "one thread per connection" model (which really
 is something from the 90s and shouldn't exist anymore, but still does).
+
+It's a "profiler of the last chance" because it really is a poor man's
+solution to doing profiling and it has a non-negligible overhead.  It's
+recommended to build applications that provide the profiling information
+and not rely on this.  But this tool is useful for legacy applications
+or applications that cannot be easily modified to add profiling support.
