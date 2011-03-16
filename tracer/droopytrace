@@ -23,6 +23,7 @@ from __future__ import with_statement
 
 __author__ = "Benoit 'tsuna' Sigoure"
 
+import httplib
 import os
 import re
 import socket
@@ -446,7 +447,17 @@ def straceprof(input, options):
       data = json.dumps(data, indent=options.json_indent)
     else:
       data = json.dumps(data)
-    print data
+    if options.server:
+      # XXX move to another thread.
+      options.server.request("POST", "/newtrace", data,
+                             {"Content-Type": "application/json"})
+      resp = options.server.getresponse()
+      if resp.status != httplib.OK:
+        raise RuntimeError("Droopy server failed: %s %s"
+                           % (resp.status, resp.reason))
+      resp.read()  # Needed to keep the connection alive.
+    else:
+      print data
 
   connected_fds = getattr(options, "connected_fds", {})
   if connected_fds:
@@ -638,6 +649,12 @@ def getopt(argv):
                     type="int", metavar="NUM", help="Stop after this many requests.")
   parser.add_option("-p", "--pid", dest="pid", default=None,
                     type="int", metavar="PID", help="Run strace on this pid.")
+  parser.add_option("-s", "--server", dest="server", default=None,
+                    metavar="HOST:PORT", help="Droopy server to send the traces"
+                    " to, for storage in HBase (implies -j) (default: off).")
+  parser.add_option("--server-timeout", dest="server_timeout", default=1.0,
+                    metavar="SEC", type="float", help="Timeout when talking to"
+                    " the --server (default: %default).")
   parser.add_option("-t", "--top", dest="top", default=1,
                     type="int", metavar="NUM",
                     help="Print the top NUM system calls (default: %default).")
@@ -683,6 +700,38 @@ def getopt(argv):
     options.pid = find_apache_worker(options)
   if options.show_backend_reqs:
     options.show_backend_times = True
+  if options.server is not None:
+    if options.server_timeout <= 0:
+      parser.error("--server-timeout must be positive")
+    try:
+      host, port = options.server.split(":")
+    except ValueError:
+      parser.error("--server must be of the form host:port")
+    try:
+      port = int(port)
+      if port <= 0:
+        raise ValueError()
+    except ValueError:
+      parser.error("--server port number %r is not a strictly positive integer"
+                   % (port,))
+    socket.setdefaulttimeout(options.server_timeout)
+    server = httplib.HTTPConnection(host, port)
+    try:
+      server.connect()
+    except socket.error, e:
+      parser.error("Couldn't connect to %s:%d: %s" % (host, port, e))
+    try:
+      server.request("GET", "/_cluster/health")
+      resp = server.getresponse()
+      if resp.status != httplib.OK:
+        parser.error("Server at %s:%d seems unhealthy and responded %s %s"
+                     % (host, port, resp.status, resp.reason))
+      resp.read()  # Needed to keep the connection alive.
+    except (socket.error, httplib.HTTPException), e:
+      parser.error("Couldn't health-check %s:%d: (%s) %s"
+                   % (host, port, type(e).__name__, e))
+    options.server = server
+    options.json = True
   if options.json:
     if json is None:
       parser.error("JSON output requested but the json module isn't available")
