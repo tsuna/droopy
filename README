@@ -1,0 +1,10 @@
+Droopy is a profiler of the last chance to profile application servers.
+It essentially consists in two parts:
+  - A client side that runs `strace' and analyzes the trace thus collected.
+  - A server side that receives the analyzed traces and stores them in HBase
+    for future analyses.
+
+Droopy was designed to work on PHP applications running under Apache, but
+it also works on any other application server that uses the pathetic "one
+process per connection" or "one thread per connection" model (which really
+is something from the 90s and shouldn't exist anymore, but still does).
