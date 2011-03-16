@@ -17,7 +17,7 @@
 # All the timestamps and durations in the script are in milliseconds unless
 # noted otherwise.
 
-"""Parses useful stats out of logs from strace -tttTs999 -fp <apache-pid>"""
+"""Parses useful stats out of logs from `strace -tttTs999 -p <pid>'"""
 
 from __future__ import with_statement
 
@@ -31,15 +31,34 @@ import sys
 import time
 from optparse import OptionParser
 
+try:
+  import json
+except ImportError:
+  json = None
+
 
 VALID_METHODS = set(["GET", "POST", "HEAD", "OPTIONS"])
 
 # We track the following syscalls that affect file descriptors.
 # We assume the file descriptor number is the 1st argument.
-TRACK_FD_SYSCALLS = set(["read", "recvfrom", "recvmsg",
+TRACK_FD_SYSCALLS = set(["read", "readv", "recvfrom", "recvmsg",
                          "write", "writev", "sendto", "sendfile",
-                         "connect", "bind", "poll",
+                         "bind", "connect", "bind", "poll",
                         ])
+# Same thing but for system calls that are only used for RPCs.
+# For these, even if we didn't see the connect() because we started tracing
+# after the connection was establish, we'll count them as interactions with
+# backends.
+# Invariant: this set must be a subset of TRACK_FD_SYSCALLS.
+TRACK_FD_RPC_SYSCALLS = set(["recvfrom", "sendto"])
+# Syscalls which we don't support right now because I haven't seen Apache use
+# them yet, although they have the same importance as `poll'.
+# Invariant: this set is exclusive of TRACK_FD_RPC_SYSCALLS.
+UNSUPPORTED_FD_SYSCALLS = set(["select", "pselect",
+                               "epoll_wait", "epoll_pwait"])
+# Any syscall that isn't in this set won't be parsed (fast-path).
+TRACK_SYSCALLS = (TRACK_FD_SYSCALLS | UNSUPPORTED_FD_SYSCALLS
+                  | set(["accept", "close"]))
 
 
 def popen(cmdline, **kwargs):
@@ -60,7 +79,7 @@ class strace(object):
     self.pid = pid
 
   def __enter__(self):
-    self.proc = popen(["strace", "-tttTs999", "-fp", str(self.pid)])
+    self.proc = popen(["strace", "-tttTs999", "-p", str(self.pid)])
     self.proc.stdin.close()
     self.proc.stdout.close()
     return self
@@ -94,43 +113,157 @@ def find_apache_worker(options):
   return pid
 
 
+def lsof_tcp(pid, deadline=5):
+  """Finds the remote IPv4 peers of all the TCP connections of the given PID.
+
+  This function is not atomic so it may be missing some very recently created
+  connections or even report an invalid remote peer if the FD gets closed and
+  re-connected to another peer during our run.
+
+  This function can be expansive on certain older versions of the Linux kernel
+  if the machine is connected to many peers.
+
+  Args:
+    pid: The PID of the process, assumed to be valid.
+    deadline: maximum time in seconds to spend in this function.  Bail out
+      with incomplete results if more than this many seconds have elapsed.
+  Yields:
+    Tuples (fd, ip, port) for each FD connected to a remote peer.
+  """
+  procfd = "/proc/%d/fd" % pid
+  if not os.path.isdir(procfd):
+    return
+
+  deadline += time.time()
+  sockets = {}  # Maps the inode number of the socket to the FD num.
+  for fd in os.listdir(procfd):
+    try:
+      dst = os.readlink("%s/%s" % (procfd, fd))
+    except OSError:
+      continue  # race: FD was closed, just ignore it.
+    if not dst.startswith("socket:["):
+      continue
+    dst = dst[8:-1]
+    assert int(dst) > 0, "negative inode? %r" % (dst,)
+    sockets[dst] = int(fd)
+
+  # Reading this file is *very* expansive with certain versions of the Linux
+  # kernel when it's connected to many peers.
+  with open("/proc/net/tcp") as f:
+    f.readline()  # Skip the headers.
+    i = 0
+    while True:
+      line = f.readline()
+      if not line:  # EOF
+        break
+      if i == 10:
+        if time.time() >= deadline:
+          break
+        i = 0
+      i += 1
+      line = line.split()
+      inode = line[9]
+      fd = sockets.get(inode)
+      if fd is None:
+        continue
+      del sockets[inode]
+      try:
+        ip, port = line[2].split(":")
+      except ValueError:
+        print repr(line)
+        raise
+      ip = int(ip, 16)
+      assert ip < 1<<32, "Not IPv4? %r" % (line,)
+      port = int(port, 16)
+      ip = ("%d.%d.%d.%d" % (ip & 0xFF,
+                             (ip & 0xFF <<  8) >>  8,
+                             (ip & 0xFF << 16) >> 16,
+                             (ip & 0xFF << 24) >> 24))
+      yield (fd, (ip, port))
+      if not sockets:
+        break  # Optimization: nothing left to search, early out.
+
+
+def get_pre_existing_connections(options):
+  connected_fds = {}
+  timestamp = time.time() * 1000
+  for fd, peer in lsof_tcp(options.pid, deadline=options.lsof_deadline):
+    connected_fds[fd] = (0, peer, 0, "(pre-existing connection)")
+  print ("lsof'ed %d pre-existing TCP connections in %7.2fms"
+         % (len(connected_fds), time.time() * 1000 - timestamp))
+  return connected_fds
+
+
 def parse_call(line):
+  """Parses a line returned by strace.
+
+  Args:
+    line: A line read from strace's output.
+  Returns:
+    A tuple (timestamp, syscall, call, retval, duration) where:
+      - timestamp: is the time at which the call was made (in ms).
+      - syscall: is the name of the syscall (e.g. "close").
+      - call: is the call itself (e.g. "close(42)").
+      - retval: is the integer return value.
+      - duration: is the time the syscall took (in ms).
+    If the syscall of this line isn't in TRACK_SYSCALLS, then the
+    timestamp and the retval in the tuple returned will be None.
+  """
   try:
-    space = 17  # Initial timestamp has a fixed size, "1299473528.482648"
-    if line[space] != " ":
-      raise ValueError("char %d isn't a space: %r" % (space, line))
-    timestamp = float(line[:space]) * 1000  # s -> ms
-    space += 1
+    space = 18  # Initial timestamp has a fixed size, "1299473528.482648"
+    if line[space - 1] != " ":
+      raise ValueError("char %d isn't a space: %r" % (space - 1, line))
     paren = line.index("(", space)
     syscall = line[space:paren]
-    equal = line.rindex(" = ", 0, -9) + 3
-    retval = int(line[equal:line.index(" ", equal)], 0)
     lt = line.rindex("<", 0, -5) + 1
     duration = float(line[lt:-2]) * 1000  # s -> ms
+    equal = line.rindex(" = ", 0, -9)
+    call = line[space:equal]  # `line' but w/o timestamp / retval.
+    # If we don't really care about this system call and we spent very little
+    # time in it, let's not parse the timestamp and the return value.  This
+    # micro-optimization saves up to 30% of the time we spend in this function,
+    # which itself accounts for 25-35% of the runtime (so we save 3-9% total).
+    # Yes, extracting a substring and converting it to a float takes that long.
+    if syscall not in TRACK_SYSCALLS and duration < 1:
+      return None, syscall, call, None, duration
+
+    timestamp = float(line[:space - 1]) * 1000  # s -> ms
+    equal += 3
+    retval = int(line[equal:line.index(" ", equal)], 0)
   except ValueError, e:
     raise ValueError("%s in %r" % (e, line))
-  return timestamp, syscall, retval, duration
+  return timestamp, syscall, call, retval, duration
 
 
 def parse_http_request(line):
   # Parse the request out.
-  request = line[line.index('"', 24)+1:line.rindex('"', 0, -10)]
-  method = request[:request.index(" ", 3)]
-  assert method in VALID_METHODS, "request=%r in line=%r" % (request, line)
-  # The resource has to be on the 1st line, so up to the 1st \r\n
-  resource = request[len(method)+1:request.find(r"\r\n", len(method) + 1)]
-  # If we have a query string, remove it.
-  i = resource.find("?", len(method) + 1)
-  if i < 0:  # If there's no query string, remove at least the " HTTP/1.x"
-    i = resource.rindex(" ")
-  resource = resource[:i]
+  try:
+    request = line[line.index('"', 24)+1:line.rindex('"', 0, -10)]
+    method = request[:request.index(" ", 3)]
+    if method not in VALID_METHODS:
+      print >>sys.stderr, "Couldn't parse the HTTP request in", repr(line)
+      return "(invalid request)", "(unknown method)", "(unknown resource)"
+    # The resource has to be on the 1st line, so up to the 1st \r\n
+    resource = request[len(method)+1:request.find(r"\r\n", len(method) + 1)]
+    # If we have a query string, remove it.
+    i = resource.find("?", len(method) + 1)
+    if i < 0:  # If there's no query string, remove at least the " HTTP/1.x"
+      i = resource.rindex(" ")
+    resource = resource[:i]
+  except ValueError:
+    print >>sys.stderr, "parse_http_request line=%r" % (line,)
+    raise
   return request, method, resource
 
 
 def parse_connect(line):
   """Extracts the remote address out of a connect() syscall."""
-  i = line.index("{", 28) + 1
-  line = line[i:line.index("}", i)]
+  try:
+    i = line.index("{", 26) + 1
+    line = line[i:line.index("}", i)]
+  except ValueError:
+    print >>sys.stderr, "line=", repr(line)
+    raise
   if line.startswith("sa_family=AF_INET"):
     i = line.index("sin_port=htons(") + 15
     port = int(line[i:line.index(")", i + 1)])
@@ -141,7 +274,7 @@ def parse_connect(line):
 
 
 def pretty_peer((host, port)):
-  if not port:
+  if port <= 0:
     return host
   fqdn = socket.getfqdn(host)
   if fqdn != host:
@@ -155,10 +288,14 @@ def pretty_peers(peers):
 
 def pretty_syscall(call, retval):
   """Pretty prints (shortens) a system call and its return value."""
-  if len(call) > 92:
-    return "      %s... = %d" % (call[:92], retval)
+  if retval is None:
+    retval = "???"
   else:
-    return "      %s = %d" % (call, retval)
+    retval = str(retval)
+  if len(call) > 92:
+    return "%s... = %s" % (call[:92], retval)
+  else:
+    return "%s = %s" % (call, retval)
 
 
 def parse_fd(call, syscall):
@@ -168,24 +305,28 @@ def parse_fd(call, syscall):
   return int(call[i + len(syscall):call.index(",", i)])
 
 
-def straceprof(fd, options):
-  client_fd = None  # File descriptor number of the client socket.
-  request = None    # Raw HTTP request (possibly truncated).
-  first_read_ts = None  # Timestamp of the 1st read from client_fd.
-  start_ts = None   # Timestamp at which we read the request from client_fd.
-  num_syscalls = 0  # Number of system calls we did for this request.
-  num_read = 0      # Number of time we had to read from client_fd.
-  read_time = 0     # Total time needed to fully read the request.
-  req_size = 0      # How many bytes we read from client_fd.
-  syscalls_times = {}  # Maps a syscall name to cumulative time spent in it.
-  syscalls_count = {}  # Maps a syscall name to the number of calls to it.
+def straceprof(input, options):
+  client_fd = None   # File descriptor number of the client socket.
+  closed_cli = None  # Have we closed the connection to our client?
+  request = None     # Raw HTTP request (possibly truncated).
+  method = None      # HTTP method of the request.
+  first_read_ts = 0  # Timestamp of the 1st read from client_fd.
+  cli_read_ts = 0    # Timestamp at which we read the request from client_fd.
+  first_write_ts = 0 # Time at which we wrote the response to the client_fd.
+  cli_write_ts = 0   # Last timestamp at which we wrote to client_fd.
+  num_syscalls = 0   # Number of system calls we did for this request.
+  num_cli_read = 0   # Number of time we had to read from client_fd.
+  num_cli_write = 0  # Number of time we had to write to client_fd.
+  read_time = 0      # Total time needed to fully read the request.
+  write_time = 0     # Total time needed to fully write the response.
+  req_size = 0       # How many bytes we read from client_fd.
+  resp_size = 0      # How many bytes we wrote to client_fd.
+  syscalls_times = {}# Maps a syscall name to cumulative time spent in it.
+  syscalls_count = {}# Maps a syscall name to the number of calls to it.
   slowest_syscall_time = 0
   slowest_syscall_name = None
   slowest_syscall_retv = None
   slowest_syscall_line = None
-  stat_calls = 0     # Number of times we called stat() during this request.
-  statphp_calls = 0  # Out of `stat_calls', how many were on .php files?
-  stat_time = 0      # Time spent in the stat syscall.
   connect_calls = 0  # Number of times we called connect() during this request.
   connected_to = set() # Set of backends we connected to during this request.
   prev_slowest = None  # (duration, name, retv, line) of the system call
@@ -195,35 +336,137 @@ def straceprof(fd, options):
                        # prev_slowest if prev_slowest is about a FD we track.
   known_fds = {}  # Maps a FD to a tuple (duration, name, retval, line)
                   # for the most recent call on that FD.
-  connected_fds = {}  # Maps a FD to a tuple (timestamp, peer, retval, line)
+  connected_fds = None# Maps a FD to a tuple (timestamp, peer, retval, line)
                       # for when this FD was connected, if we saw the connect.
   backend_time = {}   # Maps a peer we interacted with during the request
                       # to the amount of time we spent interacting with it.
   backend_reqs = {}   # Maps a peer we interacted with during the request
-                      # to a list of tuples (duration, peer, retval, line).
-  out = []  # Contain lines to print.
+                      # to a list of tuples (duration, peer, retval, line, ts).
+  calls = []  # All the calls for this request.
 
-  for line in fd:
+  def print_report():
+    """Prints a detailed report about the current query."""
+    print method + " " + resource
+    print ("  Request  size was %5d bytes%s."
+           % (req_size, "" if read_time < 0.1 else
+              " (read  the request  in %d reads  in %7.2fms)"
+              % (num_cli_read, read_time)))
+    print ("  Response size was %5d bytes%s."
+           % (resp_size, "" if read_time < 0.1 else
+              " (wrote the response in %d writes in %7.2fms)"
+              % (num_cli_write, write_time)))
+    print "  End-to-end processing time: %13.2fms" % end_to_end
+    print ("    Time executing system calls: %10.2fms in %4d calls"
+           % (sum(syscalls_times.itervalues()), num_syscalls))
+    sorted_times = sorted(syscalls_times.iteritems(),
+                          reverse=True,
+                          key=lambda (syscall, duration): duration)
+    for cumul_syscall, cumul_time in sorted_times[:options.top]:
+      print ("      Including %4d %-7s calls: %7.2fms"
+             % (syscalls_count[cumul_syscall], cumul_syscall, cumul_time))
+    sum_backend_time = sum(backend_time.itervalues())
+    if backend_time and sum_backend_time > 0.1:
+      print ("      Interacting with %2d backends: %7.2fms"
+             % (len(backend_time), sum(backend_time.itervalues())))
+      if options.show_backend_times:
+        for peer, timing in sorted(backend_time.iteritems(), reverse=True,
+                                   key=lambda (peer, timing): timing):
+          if peer[1] <= 0 and timing < 0.5:  # Not a TCP socket.
+            continue  # Ignore insignificant AF_NETLINK / AF_FILE stuff.
+          print ("%34s: %7.2fms" % (pretty_peer(peer), timing))
+          if options.show_backend_reqs:
+            for call in backend_reqs[peer]:
+              print ("      %28s: %7.2fms %s %s"
+                     % (call[1], call[0], " " if call[4] < cli_write_ts else "#",
+                        pretty_syscall(call[3], call[2])))
+    if connect_calls and options.show_connect:
+      print ("      Including %4d connect calls to: %s"
+             % (connect_calls, pretty_peers(connected_to)))
+    print ("    Slowest system call: %-9s %8.2fms\n      %s"
+           % (slowest_syscall_name, slowest_syscall_time,
+              pretty_syscall(slowest_syscall_line, slowest_syscall_retv)))
+    if prev_slowest is not None:  # => the slowest syscall was on an FD.
+      print ("    Previous system call on this FD:\n      "
+             + pretty_syscall(prev_slowest[3], prev_slowest[2]))
+      if slowest_fd == client_fd:
+        print "    This FD is the one connected to the client."
+      elif prev_connect is not None:
+        if prev_connect[0] > 0:
+          print ("    This FD got connected %6.2fms ago to %s"
+                 % (timestamp - prev_connect[0], pretty_peer(prev_connect[1])))
+        else:
+          print ("    This FD was already connected to %s"
+                 % (pretty_peer(prev_connect[1])))
+    if closed_cli:
+      print "  Apache closed the connection to the client."
+
+    if options.print_all:
+      print "--- all syscalls for this request ---"
+      for call in calls:
+        print call,
+      print "--- end syscalls for this request ---"
+
+  def print_json_report():
+    """Prints a detailed report about the current query, in JSON."""
+    data = {
+      "method": method, "request": request, "resource": resource,
+      "request_ts": first_read_ts,
+      "req_size": req_size, "resp_size": resp_size,
+      "num_cli_read": num_cli_read, "read_time": read_time,
+      "num_cli_write": num_cli_write, "write_time": write_time,
+      "end_to_end": end_to_end,
+      "num_syscalls": num_syscalls, "syscalls_times": syscalls_times,
+      "slowest_syscall_time": slowest_syscall_time or 0,
+      "slowest_syscall_name": slowest_syscall_name,
+      "slowest_syscall_retv": slowest_syscall_retv or -4242,
+      "slowest_syscall_line": slowest_syscall_line,
+      "prev_slowest": prev_slowest,
+      "apache_closed": int(closed_cli),
+    }
+    # This one contains tuples so we need to convert them to lists...
+    data["backend_reqs"] = {}
+    for (host, ip), be_calls in backend_reqs.iteritems():
+      transformed_calls = []
+      for call in be_calls:
+        call = list(call)
+        # Whether or not the syscall was in the fast path.
+        call[4] = 1 if call[4] < cli_write_ts else 0
+        transformed_calls.append(call)
+      data["backend_reqs"]["%r:%r" % (host, ip)] = transformed_calls
+
+    if slowest_fd == client_fd:
+      data["prev_connect"] = "client"
+    elif prev_connect is not None:
+      data["prev_connect"] = prev_connect
+
+    if options.print_all:
+      data["syscalls"] = calls
+
+    if options.json_indent is not None:
+      data = json.dumps(data, indent=options.json_indent)
+    else:
+      data = json.dumps(data)
+    print data
+
+  connected_fds = getattr(options, "connected_fds", {})
+  if connected_fds:
+    del options.connected_fds
+
+  for line in input:
+    #self_timing = time.time() * 1000
     # expected format for line:
     #  1299473528.478145 syscall(arg1, arg2) = 8 <0.000009>
     if not line:
       continue
+    if options.print_all:
+      calls.append(line)
     try:
-      timestamp, syscall, retval, duration = parse_call(line)
+      timestamp, syscall, call, retval, duration = parse_call(line)
     except ValueError:
       continue
-    call = line[18:line.rindex(" = ")]  # `line' but w/o timestamp / retval.
 
     if syscall == "accept":
       client_fd = retval
-      request = None
-      num_syscalls = slowest_syscall_time = 0
-      stat_calls = statphp_calls = stat_time  = connect_calls = 0
-      connected_to.clear()
-      syscalls_times.clear()
-      syscalls_count.clear()
-      backend_reqs.clear()
-      backend_time.clear()
     elif not client_fd:
       continue  # We don't know who we're talking to, skip until we do.
     else:
@@ -246,125 +489,132 @@ def straceprof(fd, options):
           slowest_fd = fd
           prev_slowest = known_fds.get(fd)
           prev_connect = connected_fds.get(fd)
+        else:
+          slowest_fd = prev_slowest = prev_connect = None
+
+    if timestamp is None:
+      continue
 
     # If we successfully read something from the client socket...
     if (retval > 0
         and syscall == "read"
         and call.startswith("read(%d," % client_fd)):
-      # First print the output for the previous query.
-      if (out
+
+      if cli_write_ts:
+        end_to_end = cli_write_ts - cli_read_ts
+
+      if (cli_write_ts
           and (options.show_options or method != "OPTIONS")
           and (not options.grep or options.grep.search(resource))
           and (not options.min_lat or end_to_end >= options.min_lat)):
-        print "\n".join(out)
+        read_time += cli_read_ts - first_read_ts
+        write_time += cli_write_ts - first_write_ts
+        if options.json:
+          print_json_report()
+        else:
+          print_report()
         options.nreqs += 1
         if options.max_reqs and options.nreqs >= options.max_reqs:
           return
-      out = []
-      if request is None:
+
+      if cli_write_ts:
+        closed_cli = False
+        request = None
+        num_syscalls = slowest_syscall_time = connect_calls = 0
+        cli_read_ts = cli_write_ts = first_write_ts = 0
+        num_cli_read = num_cli_write = read_time = write_time = 0
+        connected_to.clear()
+        syscalls_times.clear()
+        syscalls_count.clear()
+        backend_reqs.clear()
+        backend_time.clear()
+        req_size = resp_size = 0
+
+      if request is None:  # First read we're doing for this request?
+        if calls:
+          calls = [calls[-1]]  # Keep the read.
         first_read_ts = timestamp
         request, method, resource = parse_http_request(line)
       # else: It took us more than one read to get the full request.
-      start_ts = timestamp
-      num_read += 1
+      cli_read_ts = timestamp
+      num_cli_read += 1
       read_time += duration
       req_size += retval
 
     # If we write to the client socket, we're responding to the query.
     if (client_fd is not None
-          and request is not None
-          and syscall == "writev"  # It seems Apache only uses writev.
-          and call.startswith("writev(%d," % client_fd)):
-      request = None
-      end_to_end = timestamp - start_ts
-      read_time += start_ts - first_read_ts
-      syscalls_time = sum(syscalls_times.itervalues())
-      out.append("""\
-%(method)s %(resource)s
-  Request  size was %(req_size)5d bytes.
-  Response size was %(retval)5d bytes.
-  End-to-end PHP processing time: %(end_to_end)9.2fms
-    Time executing system calls: %(syscalls_time)10.2fms in %(num_syscalls)4d calls\
-""" % locals())
-      cumul_syscall, cumul_time = sorted(syscalls_times.iteritems(), reverse=True,
-                                         key=lambda (syscall, duration): duration)[0]
-      out.append("      Including % 4d %-7s calls: %7.2fms"
-                 % (syscalls_count[cumul_syscall], cumul_syscall, cumul_time))
-      sum_backend_time = sum(backend_time.itervalues())
-      if backend_time and sum_backend_time > 0.1:
-        out.append("      Interacting with %2d backends: %7.2fms"
-                   % (len(backend_time), sum(backend_time.itervalues())))
-        if options.show_backend_times:
-          for peer, timing in backend_time.iteritems():
-            out.append("        %26s: %7.2fms" % (pretty_peer(peer), timing))
-            if options.show_backend_reqs:
-              for call in backend_reqs[peer]:
-                out.append("          %24s: %7.2fms  %s"
-                           % (call[1], call[0], pretty_syscall(call[3], call[2])))
-      if connect_calls and options.show_connect:
-        out.append("      Including %4d connect calls to: %s"
-                   % (connect_calls, pretty_peers(connected_to)))
-      if stat_calls and options.show_stat:
-        out.append("      Including %(stat_calls)4d stat    calls: "
-                   "%(stat_time)7.2fms %(statphp_calls)6d stats on .php files"
-                   % locals())
-      if read_time > 0.1:
-        out.append("    Read the request in %d reads in %8.2fms"
-                   % (num_read, read_time))
-      out.append("    Slowest system call: %(slowest_syscall_name)-9s"
-                 " %(slowest_syscall_time)8.2fms" % locals())
-      out.append(pretty_syscall(slowest_syscall_line, slowest_syscall_retv))
-      if slowest_syscall_name in TRACK_FD_SYSCALLS and prev_slowest:
-        out.append("    Previous system call on this FD:\n%s"
-                   % pretty_syscall(prev_slowest[3], prev_slowest[2]))
-        if slowest_fd == client_fd:
-          out.append("    This FD is the one connected to the client.")
-        elif prev_connect:
-          out.append("    This FD got connected %6.2fms ago to %s"
-                     % (timestamp - prev_connect[0], pretty_peer(prev_connect[1])))
-      first_read_ts = start_ts = None
-      read_time = num_read = 0
-      req_size = 0
+        and syscall == "writev"  # It seems Apache only uses writev.
+        and call.startswith("writev(%d," % client_fd)):
+      if not first_write_ts:
+        first_write_ts = timestamp
+      cli_write_ts = timestamp
+      num_cli_write += 1
+      write_time += duration
+      resp_size += retval
 
     # A FD was closed, forget what we track about it.
     elif retval == 0 and syscall == "close":
       fd = int(line[24:line.index(")", 25)])
       if fd == client_fd:
-        out.append("  Apache closed the connection to the client.")
+        closed_cli = True
+        assert first_write_ts
+        client_fd = None
       else:
         if fd in known_fds:
           del known_fds[fd]
         if fd in connected_fds:
+          peer = connected_fds[fd][1]
           del connected_fds[fd]
+          if options.show_backend_reqs:
+            if peer not in backend_reqs:
+              backend_reqs[peer] = []
+            backend_reqs[peer].append((duration, syscall, retval, call,
+                                       timestamp))
 
     # Remember the last read / write on a FD.
     elif syscall in TRACK_FD_SYSCALLS:
       known_fds[fd] = (duration, syscall, retval, call)
       peer = None
-      if syscall == "connect":  # Extract the remote address
+      if (syscall == "connect"  # Extract the remote address
+          or (syscall == "bind" and "sa_family=AF_NETLINK" in call)):
         peer = parse_connect(line)
-        if 'path="/dev/log"' in peer[0]:
-          peer = None
-        else:
-          connected_fds[fd] = (timestamp, peer, retval, call)
-          connected_to.add(peer)
-          if peer not in backend_time:
-            backend_time[peer] = 0
+        connected_fds[fd] = (timestamp, peer, retval, call)
+        connected_to.add(peer)
+        if peer not in backend_time:
+          backend_time[peer] = 0
         connect_calls += 1
       elif fd in connected_fds:
         peer = connected_fds[fd][1]
         backend_time[peer] = backend_time.get(peer, 0) + duration
+      elif syscall in TRACK_FD_RPC_SYSCALLS:
+        # We use the negative value of the FD as the port number so that each
+        # FD will be counted as a different peer.
+        peer = (guess_host_type(syscall, call), -fd)
+        connected_fds[fd] = (0, peer, 0, "(pre-existing connection)")
+        backend_time[peer] = backend_time.get(peer, 0) + duration
       if peer and options.show_backend_reqs:
         if peer not in backend_reqs:
           backend_reqs[peer] = []
-        backend_reqs[peer].append((duration, syscall, retval, call))
+        backend_reqs[peer].append((duration, syscall, retval, call,
+                                   timestamp))
 
-    elif options.show_stat and syscall == "stat":
-      path = line[24:line.index('"', 25)]
-      stat_calls += 1
-      stat_time += duration
-      if path.endswith(".php") or path.endswith(".inc"):
-        statphp_calls += 1
+    elif syscall in UNSUPPORTED_FD_SYSCALLS:
+      print "  Warning: unsupported system call: %r" % (line,)
+
+    #self_timing = time.time() * 1000 - self_timing
+    #if self_timing > 10:
+    #  print >>sys.stderr, ("warning: took %.2fms to process line %r"
+    #                       % (self_timing, line))
+
+
+def guess_host_type(syscall, call):
+  if syscall == "sendto":
+    if r'"version\r\n"' in call:  # Memcache clients frequently ask this.
+      return "(unknown-memcache)"
+    i = call.index(",", len(syscall))
+    if call.startswith((', "get ', ', "set ', ', "add ', ', "delete '), i):
+      return "(unknown-memcache)"
+  return "(uknown-host)"
 
 
 def getopt(argv):
@@ -375,6 +625,12 @@ def getopt(argv):
   parser.add_option("-g", "--grep", dest="grep", default=None,
                     metavar="RE", help="Only report requests for HTTP"
                     " resources that match this regexp.")
+  parser.add_option("-j", "--json", dest="json", default=False,
+                    action="store_true",
+                    help="Print output in JSON (default: %default).")
+  parser.add_option("--json-indent", dest="json_indent", default=None,
+                    type="int", help="Number of spaces to use to indent JSON"
+                    " output (default: off).")
   parser.add_option("-l", "--min-latency", dest="min_lat", default=None,
                     type="int", metavar="MSEC", help="Only report request for"
                     " which end-to-end latency was higher than this.")
@@ -382,6 +638,9 @@ def getopt(argv):
                     type="int", metavar="NUM", help="Stop after this many requests.")
   parser.add_option("-p", "--pid", dest="pid", default=None,
                     type="int", metavar="PID", help="Run strace on this pid.")
+  parser.add_option("-t", "--top", dest="top", default=1,
+                    type="int", metavar="NUM",
+                    help="Print the top NUM system calls (default: %default).")
   parser.add_option("-u", "--apache-user", dest="user", default="www-data",
                     metavar="USER", help="Username under which Apache workers"
                     " run (default: %default).")
@@ -392,16 +651,21 @@ def getopt(argv):
   parser.add_option("-C", "--show-connect", dest="show_connect",
                     default=False, action="store_true",
                     help="Show connect() system calls (default: %default).")
+  parser.add_option("-L", "--lsof-deadline", dest="lsof_deadline", default=3,
+                    type="float", metavar="SEC", help="Spend only up to this"
+                    " many seconds finding pre-existing TCP connections"
+                    " (default: %default).")
   parser.add_option("-O", "--show-options-requests", dest="show_options",
                     default=False, action="store_true",
                     help="Show OPTIONS requests (default: %default).")
+  parser.add_option("-P", "--print-all-syscalls", dest="print_all",
+                    default=False, action="store_true",
+                    help="Print all the calls for each requests"
+                    " (default: %default).")
   parser.add_option("-R", "--show-backend-requests", dest="show_backend_reqs",
                     default=False, action="store_true",
                     help="Show requests to backends (implies -B)"
                     " (default: %default).")
-  parser.add_option("-S", "--show-stat", dest="show_stat",
-                    default=False, action="store_true",
-                    help="Show stat() system calls (default: %default).")
   options, argv = parser.parse_args(argv)
   if options.grep:
     options.grep = re.compile(options.grep)
@@ -419,11 +683,16 @@ def getopt(argv):
     options.pid = find_apache_worker(options)
   if options.show_backend_reqs:
     options.show_backend_times = True
+  if options.json:
+    if json is None:
+      parser.error("JSON output requested but the json module isn't available")
+    elif options.json_indent is not None and options.json_indent <= 0:
+      parser.error("--json-indent must have a strictly positive value")
   return options, argv
 
 
-
 def main(argv):
+  #timing = time.time() * 1000
   options, argv = getopt(argv)
   try:
     for path in argv[1:]:
@@ -434,10 +703,17 @@ def main(argv):
           straceprof(f, options)
 
     if options.pid is not None:
+      # We need to do this before we start tracing because it can easily take
+      # several seconds and we don't wanna block strace, otherwise we'll also
+      # block the process we're tracing.  We put the result in `options' which
+      # is really an ugly kludge.
+      options.connected_fds = get_pre_existing_connections(options)
       with strace(options.pid) as f:
         straceprof(f, options)
   except KeyboardInterrupt:
     return 130
+  #timing = time.time() * 1000 - timing
+  #print >>sys.stderr, "Self-reported timing: %.2fms" % timing
 
 
 if __name__ == "__main__":
