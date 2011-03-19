@@ -1,8 +1,8 @@
 Droopy is a profiler of the last chance to profile application servers.
 It essentially consists in two parts:
-  - A client side that runs `strace' and analyzes the trace thus collected.
-  - A server side that receives the analyzed traces and stores them in HBase
-    for future analyses.
+  - A client side that runs `strace' and analyzes the trace thus collected
+    and can upload them to ElasticSearch.
+  - A viewer that provides a UI to dig in the data stored in ElasticSearch.
 
 Droopy was designed to work on PHP applications running under Apache, but
 it also works on any other application server that uses the pathetic "one

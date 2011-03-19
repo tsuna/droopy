@@ -23,13 +23,17 @@ from __future__ import with_statement
 
 __author__ = "Benoit 'tsuna' Sigoure"
 
+import Queue
+import base64
 import httplib
 import os
 import re
 import socket
 import subprocess
 import sys
+import threading
 import time
+import uuid
 from optparse import OptionParser
 
 try:
@@ -60,6 +64,12 @@ UNSUPPORTED_FD_SYSCALLS = set(["select", "pselect",
 # Any syscall that isn't in this set won't be parsed (fast-path).
 TRACK_SYSCALLS = (TRACK_FD_SYSCALLS | UNSUPPORTED_FD_SYSCALLS
                   | set(["accept", "close"]))
+# Traces to upload are added to this queue for a separate thread to send them.
+TRACEQ = None
+# Fields to extract from a trace and to index separately in the `summary'
+# ElasticSearch type.
+TRACE_SUMMARY_FIELDS = ("method", "resource", "request_ts", "end_to_end",
+                        "num_syscalls", "slowest_syscall", "apache_closed")
 
 
 def popen(cmdline, **kwargs):
@@ -416,48 +426,46 @@ def straceprof(input, options):
       "num_cli_read": num_cli_read, "read_time": read_time,
       "num_cli_write": num_cli_write, "write_time": write_time,
       "end_to_end": end_to_end,
-      "num_syscalls": num_syscalls, "syscalls_times": syscalls_times,
-      "slowest_syscall_time": slowest_syscall_time or 0,
-      "slowest_syscall_name": slowest_syscall_name,
-      "slowest_syscall_retv": slowest_syscall_retv or -4242,
-      "slowest_syscall_line": slowest_syscall_line,
-      "prev_slowest": prev_slowest,
-      "apache_closed": int(closed_cli),
+      "num_syscalls": num_syscalls,
+      "slowest_syscall": jsonify_syscall(slowest_syscall_time or 0,
+                                         slowest_syscall_name,
+                                         slowest_syscall_retv or -4242,
+                                         slowest_syscall_line),
+      "apache_closed": closed_cli,
     }
-    # This one contains tuples so we need to convert them to lists...
-    data["backend_reqs"] = {}
+    timings = []
+    for syscall, timing in syscalls_times.iteritems():
+      timings.append({"name": syscall, "time": timing})
+    data["syscalls_times"] = timings
+    if prev_slowest is not None:
+      data["prev_slowest"] = jsonify_syscall(*prev_slowest),
+    be_reqs = []
     for (host, ip), be_calls in backend_reqs.iteritems():
       transformed_calls = []
       for call in be_calls:
         call = list(call)
         # Whether or not the syscall was in the fast path.
-        call[4] = 1 if call[4] < cli_write_ts else 0
-        transformed_calls.append(call)
-      data["backend_reqs"]["%r:%r" % (host, ip)] = transformed_calls
-
+        call[4] = True if call[4] < cli_write_ts else False
+        transformed_calls.append(jsonify_syscall(*call))
+      be_reqs.append({"peer": pretty_peer((host, ip)),
+                      "calls": transformed_calls})
+      data["backend_reqs"] = be_reqs
     if slowest_fd == client_fd:
-      data["prev_connect"] = "client"
+      data["prev_connect"] = {"client": True}
     elif prev_connect is not None:
-      data["prev_connect"] = prev_connect
+      data["prev_connect"] = jsonify_connect(*prev_connect)
 
     if options.print_all:
       data["syscalls"] = calls
 
-    if options.json_indent is not None:
-      data = json.dumps(data, indent=options.json_indent)
+    if options.server is not None:
+      try:
+        TRACEQ.put_nowait(data)
+      except Queue.Full:
+        print >>sys.stderr, ("Trace queue is full, discarding trace: "
+                             "%s %s %7.2fms" % (method, resource, end_to_end))
     else:
-      data = json.dumps(data)
-    if options.server:
-      # XXX move to another thread.
-      options.server.request("POST", "/newtrace", data,
-                             {"Content-Type": "application/json"})
-      resp = options.server.getresponse()
-      if resp.status != httplib.OK:
-        raise RuntimeError("Droopy server failed: %s %s"
-                           % (resp.status, resp.reason))
-      resp.read()  # Needed to keep the connection alive.
-    else:
-      print data
+      print json_encode(data, options)
 
   connected_fds = getattr(options, "connected_fds", {})
   if connected_fds:
@@ -628,6 +636,116 @@ def guess_host_type(syscall, call):
   return "(uknown-host)"
 
 
+def jsonify_syscall(duration, name, retv, call, ts=None):
+  return {
+    "duration": duration,
+    "name": name,
+    "retv": retv,
+    "call": call,
+    "timestamp": ts,
+  }
+
+
+def jsonify_connect(ts, (host, port), retv, call):
+  return {
+    "peer": pretty_peer((host, port)),
+    "retv": retv,
+    "call": call,
+    "timestamp": ts,
+  }
+
+
+def json_encode(data, options=None):
+  if options is not None and options.json_indent is not None:
+    return json.dumps(data, indent=options.json_indent)
+  else:
+    return json.dumps(data)
+
+
+def gen_trace_id():
+  return base64.urlsafe_b64encode(uuid.uuid4().bytes).rstrip("=")
+
+
+def upload_thread(server, options):
+  """Starts a separate thread to upload traces to the given server."""
+  batch = []  # Items to send to ES.
+  nitems = 0  # How many items are we sending to ES.
+  batch_bytes = 0  # Total size of the items.
+  # Actions to use to index data through ElasticSearch's /_bulk interface.
+  index_summary = {"index": {"_index": "droopy", "_type": "summary", "_id": None}}
+  index_trace = {"index": {"_index": "droopy", "_type": "trace", "_id": None}}
+  index_fulltrace = {"index": {"_index": "droopy", "_type": "fulltrace", "_id": None}}
+  width = len(str(options.server_batch))
+  while True:
+    trace = TRACEQ.get()
+
+    if trace is not TRACEQ:
+      nitems += 1
+      id = gen_trace_id()
+      index_summary["index"]["_id"] = id
+      batch.append(json_encode(index_summary))
+      batch.append(json_encode(dict((key, trace.pop(key))
+                                    for key in TRACE_SUMMARY_FIELDS)))
+
+      index_trace["index"]["_id"] = id
+      batch.append(json_encode(index_trace))
+      fulltrace = trace.pop("syscalls", None)
+      trace = json_encode(trace)
+      batch.append(trace)
+      batch_bytes += len(trace)
+
+      if fulltrace:
+        index_fulltrace["index"]["_id"] = id
+        batch.append(json_encode(index_fulltrace))
+        batch.append(json_encode({"syscalls": fulltrace}))
+        batch_bytes += len(batch[-1])
+
+      if (nitems < options.server_batch
+          and batch_bytes < options.server_size_threshold):
+        continue
+    elif not batch:  # trace is the poison pill and there's nothing batched
+      break          # so quit immediately.
+
+    # Flush the batch.
+    nitems = len(batch) / 2  # Divide by 2 to not count the actions.
+    batch = "\n".join(trace for trace in batch) + "\n"
+    timing = time.time()
+    server.request("POST", "/_bulk", batch,
+                   {"Content-Type": "application/json"})
+    try:
+      resp = server.getresponse()
+    except socket.error, e:
+      print >>sys.stderr, "Failed to POST to ElasticSearch: %s" % e
+      break
+    if resp.status != httplib.OK:
+      raise RuntimeError("Failed to upload traces to ElasticSearch: %s %s\n%s"
+                         % (resp.status, resp.reason, resp.read()))
+    resp = resp.read()
+    timing = (time.time() - timing) * 1000
+    resp = json.loads(resp)
+    items = resp.get("items")
+    if not items:
+      raise RuntimeError("Empty response from ElasticSearch: %r" % (resp,))
+    elif len(items) != nitems:
+      raise RuntimeError("Unexpected number of results from ElasticSearch:"
+                         " expected %d, got %d, response=%r"
+                         % (nitems, len(items), resp))
+    for item in items:
+      item = item.get("index")
+      if not item or not item.get("ok") or not item.get("_id"):
+        raise RuntimeError("Weird response from ElasticSearch: %r" % (resp,))
+    trace_items = [item["index"] for item in items
+                   if item["index"]["_type"] == "trace"]
+    print ("Created %*d traces (%5dKB) in %7.2fms, IDs: %s"
+           % (width, len(trace_items), len(batch) / 1024, timing,
+              " ".join(item["_id"] for item in trace_items)))
+    batch = []
+    nitems = batch_bytes = 0
+
+    if trace is TRACEQ:  # If the queue was added in itself, it's a special
+      break              # message ("poison pill") to tell us to exit.
+
+
 def getopt(argv):
   parser = parser = OptionParser(description=__doc__)
   parser.add_option("-f", "--find-worker", dest="find_worker",
@@ -651,10 +769,21 @@ def getopt(argv):
                     type="int", metavar="PID", help="Run strace on this pid.")
   parser.add_option("-s", "--server", dest="server", default=None,
                     metavar="HOST:PORT", help="Droopy server to send the traces"
-                    " to, for storage in HBase (implies -j) (default: off).")
-  parser.add_option("--server-timeout", dest="server_timeout", default=1.0,
+                    " to, for storage in ElasticSearch (implies -j)"
+                    " (default: off).")
+  parser.add_option("--server-timeout", dest="server_timeout", default=3.0,
                     metavar="SEC", type="float", help="Timeout when talking to"
                     " the --server (default: %default).")
+  parser.add_option("--server-batch", dest="server_batch", default=25,
+                    type="int", metavar="NUM", help="How many traces to send"
+                    " at once (default: %default).")
+  parser.add_option("--server-queue-size", dest="server_queue_size", default=None,
+                    type="int", metavar="NUM", help="Maximum number of traces to"
+                    " queue internally (default: 10 * --server-batch).")
+  parser.add_option("--server-size-threshold", dest="server_size_threshold",
+                    default=4096, type="int", metavar="KBYTES",
+                    help="Traces bigger than this always trigger a flush"
+                    " (default: %default).")
   parser.add_option("-t", "--top", dest="top", default=1,
                     type="int", metavar="NUM",
                     help="Print the top NUM system calls (default: %default).")
@@ -691,6 +820,14 @@ def getopt(argv):
   if options.max_reqs is not None and options.max_reqs <= 0:
     parser.error("--max-requests must have a positive value")
   options.nreqs = 0
+  if options.server_batch <= 0:
+    parser.error("--server-batch must be strictly positive")
+  elif options.server_queue_size is None:
+    options.server_queue_size = options.server_batch * 10
+  elif options.server_queue_size <= 0:
+    parser.error("--server-queue-size must be strictly positive")
+  elif options.server_size_threshold <= 0:
+    parser.error("--server-size-threshold must be strictly positive")
   if options.pid is not None:
     if options.pid <= 1:
       parser.error("--pid must have a value strictly greater than 1")
@@ -701,6 +838,7 @@ def getopt(argv):
   if options.show_backend_reqs:
     options.show_backend_times = True
   if options.server is not None:
+    options.server_size_threshold <<= 10  # Convert KB -> bytes.
     if options.server_timeout <= 0:
       parser.error("--server-timeout must be positive")
     try:
@@ -730,7 +868,11 @@ def getopt(argv):
     except (socket.error, httplib.HTTPException), e:
       parser.error("Couldn't health-check %s:%d: (%s) %s"
                    % (host, port, type(e).__name__, e))
-    options.server = server
+    global TRACEQ
+    TRACEQ = Queue.Queue(maxsize=options.server_queue_size)
+    options.server = threading.Thread(name="upload", target=upload_thread,
+                                      args=(server, options))
+    options.server.start()
     options.json = True
   if options.json:
     if json is None:
@@ -763,6 +905,11 @@ def main(argv):
     return 130
   #timing = time.time() * 1000 - timing
   #print >>sys.stderr, "Self-reported timing: %.2fms" % timing
+  if options.server is not None and options.server.is_alive():
+    TRACEQ.put(TRACEQ)  # Poison pill to ask the thread to exit.
+    options.server.join(options.server_timeout * 5)  # Allow a bit of time...
+    if options.server.is_alive():
+      print >>sys.stderr, "Uploader thread isn't exiting :(", options.server
 
 
 if __name__ == "__main__":
