@@ -638,13 +638,15 @@ def guess_host_type(syscall, call):
 
 
 def jsonify_syscall(duration, name, retv, call, ts=None):
-  return {
+  result = {
     "duration": duration,
     "name": name,
     "retv": retv,
     "call": call,
-    "timestamp": ts,
   }
+  if ts:
+    result["timestamp"] = ts
+  return result
 
 
 def jsonify_connect(ts, (host, port), retv, call):
