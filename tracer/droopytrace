@@ -903,13 +903,14 @@ def main(argv):
         straceprof(f, options)
   except KeyboardInterrupt:
     return 130
-  #timing = time.time() * 1000 - timing
-  #print >>sys.stderr, "Self-reported timing: %.2fms" % timing
-  if options.server is not None and options.server.is_alive():
-    TRACEQ.put(TRACEQ)  # Poison pill to ask the thread to exit.
-    options.server.join(options.server_timeout * 5)  # Allow a bit of time...
-    if options.server.is_alive():
-      print >>sys.stderr, "Uploader thread isn't exiting :(", options.server
+  finally:
+    #timing = time.time() * 1000 - timing
+    #print >>sys.stderr, "Self-reported timing: %.2fms" % timing
+    if options.server is not None and options.server.is_alive():
+      TRACEQ.put(TRACEQ)  # Poison pill to ask the thread to exit.
+      options.server.join(options.server_timeout * 5)  # Allow a bit of time...
+      if options.server.is_alive():
+        print >>sys.stderr, "Uploader thread isn't exiting :(", options.server
 
 
 if __name__ == "__main__":
