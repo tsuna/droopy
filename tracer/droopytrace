@@ -472,7 +472,7 @@ def straceprof(input, options):
     del options.connected_fds
 
   for line in input:
-    #self_timing = time.time() * 1000
+    self_timing = time.time() * 1000
     # expected format for line:
     #  1299473528.478145 syscall(arg1, arg2) = 8 <0.000009>
     if not line:
@@ -620,10 +620,10 @@ def straceprof(input, options):
     elif syscall in UNSUPPORTED_FD_SYSCALLS:
       print "  Warning: unsupported system call: %r" % (line,)
 
-    #self_timing = time.time() * 1000 - self_timing
-    #if self_timing > 10:
-    #  print >>sys.stderr, ("warning: took %.2fms to process line %r"
-    #                       % (self_timing, line))
+    self_timing = time.time() * 1000 - self_timing
+    if self_timing > 10:
+      print >>sys.stderr, ("warning: took %.2fms to process line %r"
+                           % (self_timing, line))
 
 
 def guess_host_type(syscall, call):
