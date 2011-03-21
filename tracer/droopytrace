@@ -69,7 +69,8 @@ TRACEQ = None
 # Fields to extract from a trace and to index separately in the `summary'
 # ElasticSearch type.
 TRACE_SUMMARY_FIELDS = ("method", "resource", "request_ts", "end_to_end",
-                        "num_syscalls", "slowest_syscall", "apache_closed")
+                        "num_syscalls", "slowest_syscall", "apache_closed",
+                        "prev_slowest", "prev_connect")
 
 
 def popen(cmdline, **kwargs):
@@ -685,7 +686,8 @@ def upload_thread(server, options):
       index_summary["index"]["_id"] = id
       batch.append(json_encode(index_summary))
       batch.append(json_encode(dict((key, trace.pop(key))
-                                    for key in TRACE_SUMMARY_FIELDS)))
+                                    for key in TRACE_SUMMARY_FIELDS
+                                    if key in trace)))
 
       index_trace["index"]["_id"] = id
       batch.append(json_encode(index_trace))
