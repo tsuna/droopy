@@ -20,7 +20,15 @@ viewer: gwtc staticroot
 top_builddir = build
 
 viewer_JAVA = \
+	viewer/DateTimeBox.java	\
+	viewer/ESResponse.java	\
+	viewer/EventsHandler.java	\
+	viewer/JsArrayIterator.java	\
+	viewer/Json.java	\
 	viewer/Main.java	\
+	viewer/QueryStringDecoder.java	\
+	viewer/Summary.java	\
+	viewer/ValidatedTextBox.java	\
 
 viewer_DEPENDENCIES = viewer.gwt.xml
 
