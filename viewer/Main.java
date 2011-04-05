@@ -66,7 +66,7 @@ final class Main implements EntryPoint {
 
   private final VerticalPanel root = new VerticalPanel();
   private final InlineLabel status = new InlineLabel();
-  private final Tree traces = new Tree();
+  private final AlignedTree traces = new AlignedTree();
 
   private final DateTimeBox start_datebox = new DateTimeBox();
   private final DateTimeBox end_datebox = new DateTimeBox();
@@ -195,9 +195,10 @@ final class Main implements EntryPoint {
     final RequestBuilder builder =
       new RequestBuilder(has_body ? RequestBuilder.POST : RequestBuilder.GET,
                          server + resource);
-    if (has_body) {
-      builder.setHeader("Content-Type", "application/json");
-    }
+    // Doesn't work on Chrome due to ES bug #828.
+    //if (has_body) {
+    //  builder.setHeader("Content-Type", "application/json");
+    //}
     try {
       builder.sendRequest(body, callback);
     } catch (RequestException e) {
@@ -325,6 +326,7 @@ final class Main implements EntryPoint {
       final TreeItem trace = new TreeItem(summary.source().widget());
       traces.addItem(trace);
     }
+    traces.align();
   }
 
   private static final long toMillis(final DateTimeBox box) {

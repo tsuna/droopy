@@ -14,6 +14,7 @@ package viewer;
 
 import com.google.gwt.core.client.JavaScriptObject;
 import com.google.gwt.core.client.JsArray;
+import com.google.gwt.i18n.client.NumberFormat;
 import com.google.gwt.json.client.JSONObject;
 import com.google.gwt.user.client.ui.InlineLabel;
 import com.google.gwt.user.client.ui.Widget;
@@ -30,14 +31,57 @@ public final class Summary extends JavaScriptObject {
   public native String resource() /*-{ return this.resource }-*/;
   public native double endToEnd() /*-{ return this.end_to_end }-*/;
   public native int numSyscalls() /*-{ return this.num_syscalls }-*/;
+  public native Syscall slowestSyscall() /*-{ return this.slowest_syscall }-*/;
+  public native ConnectCall prevConnect() /*-{ return this.prev_connect }-*/;
 
+  public String slowestBackend() {
+    final ConnectCall call = prevConnect();
+    if (call == null) {
+      return null;
+    }
+    if (call.client()) {
+      return "(to client)";
+    }
+    return call.peer();
+  }
+
+  public boolean hasSlowBackend() {
+    return slowestBackend() != null;
+  }
+
+  /** Returns the widget associated with this summary.  */
   public Widget widget() {
     return new SummaryWidget();
   }
 
-  private final class SummaryWidget extends InlineLabel {
+  private static final NumberFormat FMT = NumberFormat.getFormat("0.00");
+
+  /** Format a timing in a human readable fashion.  */
+  private static String fmt(final double timing) {
+    return FMT.format(timing) + "ms";
+  }
+
+  private static InlineLabel label(final String text) {
+    return new InlineLabel(text);
+  }
+
+  private final class SummaryWidget extends HBox {
     SummaryWidget() {
-      super(method() + ' ' + resource() + " in " + endToEnd() + "ms");
+      super.setWidth("100%");
+      super.add(label(method()));
+      super.add(label(resource()));
+      super.add(label(fmt(endToEnd())), HBox.ALIGN_RIGHT);
+      super.add(label("in " + numSyscalls() + " syscalls"),
+                HBox.ALIGN_RIGHT);
+      final Syscall slowest = slowestSyscall();
+      final String slowdesc;
+      if (hasSlowBackend()) {
+        slowdesc = "Slowest backend call: " + slowestBackend();
+      } else {
+        slowdesc = "Slowest syscall: " + slowest.name();
+      }
+      super.add(label(slowdesc + ":"), HBox.ALIGN_RIGHT);
+      super.add(label(fmt(slowest.duration())), HBox.ALIGN_RIGHT);
     }
   }
 
