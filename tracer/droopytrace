@@ -436,7 +436,8 @@ def straceprof(input, options):
     }
     timings = []
     for syscall, timing in syscalls_times.iteritems():
-      timings.append({"name": syscall, "time": timing})
+      timings.append({"name": syscall, "time": timing,
+                      "count": syscalls_count[syscall]})
     data["syscalls_times"] = timings
     if prev_slowest is not None:
       data["prev_slowest"] = jsonify_syscall(*prev_slowest),

@@ -65,6 +65,10 @@ public final class Trace extends JavaScriptObject {
     return n + " " + (n > 1 ? text + 's' : text);
   }
 
+  private static String pluralnz(final int n, final String text) {
+    return n == 0 ? "" : plural(n, text);
+  }
+
   private final class TraceWidget extends AlignedTree {
     TraceWidget(final Summary summary) {
       super.setWidth("100%");
@@ -98,17 +102,19 @@ public final class Trace extends JavaScriptObject {
         for (final SyscallTime call : JsArrayIterator.iter(syscallsTimes())) {
           // Make sure we grab at least the top 3 calls by time spent,
           // and then consider any of the top N% calls to be important.
+          final TreeItem chosen;
           if (timings.getChildCount() > 3
               && cumul_time / syscalls_times > 0.8) {
-            negligible_timings.addItem(row(call.name(), fmt(call.time())));
+            chosen = negligible_timings;
             negligible_time += call.time();
           } else {
-            timings.addItem(row(call.name(), fmt(call.time())));
+            chosen = timings;
             cumul_time += call.time();
           }
+          chosen.addItem(row(call.name(), fmt(call.time()), pluralnz(call.count(), "call")));
         }
         negligible_timings.setWidget(row(plural(negligible_timings.getChildCount(),
-                                                "negligible call"), fmt(negligible_time)));
+                                                "negligible syscall"), fmt(negligible_time)));
         timings.addItem(negligible_timings);
         timings.setWidget(row("Time spent executing system calls:",
                               fmt(syscalls_times),
@@ -144,5 +150,7 @@ final class SyscallTime extends JavaScriptObject {
 
   public native String name() /*-{ return this.name }-*/;
   public native double time() /*-{ return this.time }-*/;
+  // This field was added later, so it might not always be present.
+  public native int count() /*-{ return this.hasOwnProperty("count") && this.count || 0 }-*/;
 
 }
