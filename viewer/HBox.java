@@ -35,4 +35,9 @@ public class HBox extends HorizontalPanel {
     super.setCellHorizontalAlignment(w, align);
   }
 
+  /** Adds the given widget and aligns it to the right.  */
+  public void addRight(final Widget w) {
+    add(w, ALIGN_RIGHT);
+  }
+
 }

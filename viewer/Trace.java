@@ -18,6 +18,7 @@ import com.google.gwt.core.client.Scheduler;
 import com.google.gwt.i18n.client.NumberFormat;
 import com.google.gwt.json.client.JSONObject;
 import com.google.gwt.user.client.ui.Widget;
+import com.google.gwt.user.client.ui.TreeItem;
 
 /**
  * JavaScript overlay for Droopy traces.
@@ -34,6 +35,10 @@ public final class Trace extends JavaScriptObject {
   public native int numCliWrite() /*-{ return this.num_cli_write }-*/;
   public native double writeTime() /*-{ return this.write_time }-*/;
   public native JsArray<SyscallTime> syscallsTimes() /*-{ return this.syscalls_times }-*/;
+
+  private native void sortSyscallTimes() /*-{
+    this.syscalls_times.sort(function(a, b) { return b.time - a.time })
+  }-*/;
 
   /** Returns the widget associated with this trace.  */
   public Widget widget(final Summary summary) {
@@ -78,15 +83,40 @@ public final class Trace extends JavaScriptObject {
         super.addRow("Response size: ", respSize() + " bytes");
       }
 
-      double syscalls_times = 0;
-      for (final SyscallTime call : JsArrayIterator.iter(syscallsTimes())) {
-        syscalls_times += call.time();
+      {
+        // First compute the total amount of time spent doing system calls.
+        double syscalls_times = 0;
+        sortSyscallTimes();  // Make sure we sort them by time spent.
+        for (final SyscallTime call : JsArrayIterator.iter(syscallsTimes())) {
+          syscalls_times += call.time();
+        }
+        // Do another loop and find the top N system calls.
+        double cumul_time = 0;  // How much cumulative time we have so far.
+        final TreeItem timings = new TreeItem();  // The important calls.
+        final TreeItem negligible_timings = new TreeItem();  // The long tail.
+        double negligible_time = 0;  // How much time spent in the long tail.
+        for (final SyscallTime call : JsArrayIterator.iter(syscallsTimes())) {
+          // Make sure we grab at least the top 3 calls by time spent,
+          // and then consider any of the top N% calls to be important.
+          if (timings.getChildCount() > 3
+              && cumul_time / syscalls_times > 0.8) {
+            negligible_timings.addItem(row(call.name(), fmt(call.time())));
+            negligible_time += call.time();
+          } else {
+            timings.addItem(row(call.name(), fmt(call.time())));
+            cumul_time += call.time();
+          }
+        }
+        negligible_timings.setWidget(row(plural(negligible_timings.getChildCount(),
+                                                "negligible call"), fmt(negligible_time)));
+        timings.addItem(negligible_timings);
+        timings.setWidget(row("Time spent executing system calls:",
+                              fmt(syscalls_times),
+                              "in " + plural(summary.numSyscalls(), "call"),
+                              "(= " + percent(syscalls_times, summary.endToEnd())
+                              + " of total time)"));
+        super.addItem(timings);
       }
-      super.addRow("Time spent executing system calls:",
-                   fmt(syscalls_times),
-                   "in " + plural(summary.numSyscalls(), "call"),
-                   "(= " + percent(syscalls_times, summary.endToEnd())
-                   + " of total time)");
     }
 
     protected void doAttachChildren() {

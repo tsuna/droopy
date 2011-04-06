@@ -37,28 +37,56 @@ public class AlignedTree extends Tree {
     return new InlineLabel(s);
   }
 
+  private static boolean needRightAlign(final String s) {
+    return s.endsWith("ms");
+  }
+
   public void addRow(final String a, final String b) {
+    addItem(row(a, b));
+  }
+
+  public static HBox row(final String a, final String b) {
     final HBox row = new HBox();
     row.add(label(a));
-    row.add(label(b));
-    addItem(row);
+    if (needRightAlign(b)) {
+      row.addRight(label(b));
+    } else {
+      row.add(label(b));
+    }
+    return row;
   }
 
   public void addRow(final String a, final String b, final String c) {
+    addItem(row(a, b, c));
+  }
+
+  public static HBox row(final String a, final String b, final String c) {
     final HBox row = new HBox();
     row.add(label(a));
     row.add(label(b));
-    row.add(label(c));
-    addItem(row);
+    if (needRightAlign(c)) {
+      row.addRight(label(c));
+    } else {
+      row.add(label(c));
+    }
+    return row;
   }
 
   public void addRow(final String a, final String b, final String c, final String d) {
+    addItem(row(a, b, c, d));
+  }
+
+  public static HBox row(final String a, final String b, final String c, final String d) {
     final HBox row = new HBox();
     row.add(label(a));
     row.add(label(b));
     row.add(label(c));
-    row.add(label(d));
-    addItem(row);
+    if (needRightAlign(d)) {
+      row.addRight(label(d));
+    } else {
+      row.add(label(d));
+    }
+    return row;
   }
 
   /**
