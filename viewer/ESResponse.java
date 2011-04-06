@@ -50,6 +50,10 @@ public final class ESResponse<T extends JavaScriptObject> extends JavaScriptObje
   }
 
   public static final class Hit<T extends JavaScriptObject> extends JavaScriptObject {
+    public static <T extends JavaScriptObject> Hit<T> fromJson(final JSONObject json) {
+      return json.getJavaScriptObject().cast();
+    }
+
     protected Hit() {}
     public native String index() /*-{ return this._index }-*/;
     public native String type() /*-{ return this._type }-*/;

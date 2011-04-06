@@ -12,7 +12,9 @@
 // see <http://www.gnu.org/licenses/>.
 package viewer;
 
+import java.util.Collections;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -239,11 +241,9 @@ final class Main implements EntryPoint {
         }
       };
       TextBox tb = start_datebox.getTextBox();
-      tb.addBlurHandler(refresh);
       tb.addKeyPressHandler(refresh);
       start_datebox.addValueChangeHandler(vch);
       tb = end_datebox.getTextBox();
-      tb.addBlurHandler(refresh);
       tb.addKeyPressHandler(refresh);
       end_datebox.addValueChangeHandler(vch);
     }
@@ -252,8 +252,7 @@ final class Main implements EntryPoint {
   private void setupHistory() {
     final ValueChangeHandler<String> handler = new ValueChangeHandler<String>() {
       public void onValueChange(final ValueChangeEvent<String> event) {
-        Map<String, List<String>> params =
-          QueryStringDecoder.getParameters(event.getValue());
+        final Map<String, List<String>> params = parseQueryString(event.getValue());
         List<String> value;
         if ((value = params.get("start")) != null) {
           start_datebox.getTextBox().setValue(value.get(0));
@@ -290,6 +289,7 @@ final class Main implements EntryPoint {
   }
 
   private void loadTraces() {
+    status.setText("Loading...");
     final Json request_ts = object()
       .add("from", toMillis(start_datebox));
     if (end_datebox.getValue() != null) {
@@ -322,12 +322,134 @@ final class Main implements EntryPoint {
 
   private void renderTraces(final ESResponse.Hits<Summary> summaries) {
     traces.clear();
-    for (final ESResponse.Hit<Summary> summary : summaries.iterator()) {
-      final TreeItem trace = new TreeItem(summary.source().widget());
+    final HashSet<String> expanded = new HashSet(getHistoryTokens("trace"));
+    for (final ESResponse.Hit<Summary> hit : summaries.iterator()) {
+      final String id = hit.id();
+      final Summary summary = hit.source();
+      final TreeItem trace = new LazyTreeItem(summary.widget()) {
+        protected void onFirstOpen() {
+          expandTrace(this, id, summary);
+          onOpen();
+        }
+        protected void onOpen() {
+          appendHistoryToken("trace", id);
+        }
+        protected void onClose() {
+          removeHistoryToken("trace", id);
+        }
+      };
       traces.addItem(trace);
+      if (expanded.remove(id)) {  // If this trace ID should be expanded...
+        trace.setState(true);     // then expand it now.
+      }
     }
     traces.align();
+    // IDs that haven't been expanded are no longer displayed,
+    // so remove them from the URL.
+    for (final String id : expanded) {
+      removeHistoryToken("trace", id);
+    }
   }
+
+  private void expandTrace(final TreeItem parent, final String traceid,
+                           final Summary summary) {
+    ajax("/droopy/trace/" + traceid, new AjaxCallback() {
+      public void onSuccess(final JSONValue response) {
+        final ESResponse.Hit<Trace> hit = ESResponse.Hit.fromJson(response.isObject());
+        parent.removeItems();
+        parent.addItem(hit.source().widget(summary));
+      }
+    });
+  }
+
+  // ---------------- //
+  // History helpers. //
+  // ---------------- //
+
+  private static void appendHistoryToken(final String key, final String value) {
+    appendHistoryToken(key, value, false);
+  }
+
+  private static void appendHistoryToken(final String key, final String value,
+                                         final boolean fire_event) {
+    final String current = History.getToken();
+    if (current.isEmpty()) {
+      History.newItem(key + '=' + value, fire_event);
+      return;
+    }
+    final Map<String, List<String>> params = parseQueryString(current);
+    final List<String> values = params.get(key);
+    if (values != null) {
+      for (final String existing : values) {
+        if (value.equals(existing)) {
+          return;
+        }
+      }
+    }
+    History.newItem(current + '&' + key + '=' + value, fire_event);
+  }
+
+  private static void removeHistoryToken(final String key, final String value) {
+    removeHistoryToken(key, value, false);
+  }
+
+  private static void removeHistoryToken(final String key, final String value,
+                                         final boolean fire_event) {
+    final String current = History.getToken();
+    if (current.isEmpty()) {
+      return;
+    }
+    final String search = key + '=' + value;
+    if (current.startsWith(search)) {
+      History.newItem(current.substring(search.length()));
+      return;
+    }
+    final Map<String, List<String>> params = parseQueryString(current);
+    final List<String> values = params.get(key);
+    if (values != null) {
+      for (final String existing : values) {
+        if (value.equals(existing)) {
+          final int index = current.indexOf('&' + search);
+          if (index < 0) {  // Should never happen.  Be loud.
+            Window.alert("WTF? Failed to find history token "
+                         + search + " in URL");
+          } else {
+            History.newItem(current.substring(0, index)
+                            + current.substring(index + search.length() + 1),
+                            fire_event);
+          }
+          return;
+        }
+      }
+    }
+  }
+
+  private static final List<String> getHistoryTokens(final String key) {
+    final String token = History.getToken();
+    if (token.isEmpty()) {
+      return Collections.emptyList();
+    }
+    final Map<String, List<String>> params = parseQueryString(token);
+    final List<String> values = params.get(key);
+    // OK, this is an interesting peculiarity of the Java language.
+    // I originally wrote the following line, but it doesn't compile:
+    //return values == null ? Collections.emptyList() : values;
+    // Because of this somewhat cryptic error:
+    //   Type mismatch: cannot convert from
+    //   List<capture#1-of ? extends Object> to List<String
+    // This is because the type of the conditional expression is the "lub"
+    // (lower upper bound) of the two operands.  So instead we have to help
+    // the compiler and disambiguate the code with this C++-like syntax:
+    return values == null ? Collections.<String>emptyList() : values;
+  }
+
+  private static final Map<String, List<String>> parseQueryString(final String querystring) {
+    return QueryStringDecoder.getParameters(querystring);
+  }
+
+  // ------------- //
+  // Misc helpers. //
+  // ------------- //
 
   private static final long toMillis(final DateTimeBox box) {
     return box.getValue().getTime();

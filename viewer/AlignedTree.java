@@ -13,6 +13,7 @@
 package viewer;
 
 import com.google.gwt.user.client.ui.HorizontalPanel;
+import com.google.gwt.user.client.ui.InlineLabel;
 import com.google.gwt.user.client.ui.Tree;
 import com.google.gwt.user.client.ui.TreeItem;
 import com.google.gwt.user.client.ui.Widget;
@@ -30,6 +31,34 @@ public class AlignedTree extends Tree {
       throw new IllegalArgumentException("negative spacing: " + spacing);
     }
     this.spacing = spacing;
+  }
+
+  private static InlineLabel label(final String s) {
+    return new InlineLabel(s);
+  }
+
+  public void addRow(final String a, final String b) {
+    final HBox row = new HBox();
+    row.add(label(a));
+    row.add(label(b));
+    addItem(row);
+  }
+
+  public void addRow(final String a, final String b, final String c) {
+    final HBox row = new HBox();
+    row.add(label(a));
+    row.add(label(b));
+    row.add(label(c));
+    addItem(row);
+  }
+
+  public void addRow(final String a, final String b, final String c, final String d) {
+    final HBox row = new HBox();
+    row.add(label(a));
+    row.add(label(b));
+    row.add(label(c));
+    row.add(label(d));
+    addItem(row);
   }
 
   /**

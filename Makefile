@@ -28,10 +28,12 @@ viewer_JAVA = \
 	viewer/HBox.java	\
 	viewer/JsArrayIterator.java	\
 	viewer/Json.java	\
+	viewer/LazyTreeItem.java	\
 	viewer/Main.java	\
 	viewer/QueryStringDecoder.java	\
 	viewer/Summary.java	\
 	viewer/Syscall.java	\
+	viewer/Trace.java	\
 	viewer/ValidatedTextBox.java	\
 
 viewer_DEPENDENCIES = viewer.gwt.xml

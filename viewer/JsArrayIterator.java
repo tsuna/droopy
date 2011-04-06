@@ -31,6 +31,10 @@ public final class JsArrayIterator<T extends JavaScriptObject> implements Iterab
     this.array = array;
   }
 
+  public static <T extends JavaScriptObject> JsArrayIterator<T> iter(final JsArray<T> array) {
+    return new JsArrayIterator<T>(array);
+  }
+
   public Iterator<T> iterator() {
     return this;
   }
