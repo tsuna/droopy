@@ -118,9 +118,9 @@ public final class Trace extends JavaScriptObject {
         timings.addItem(negligible_timings);
         timings.setWidget(row("Time spent executing system calls:",
                               fmt(syscalls_times),
-                              "in " + plural(summary.numSyscalls(), "call"),
-                              "(= " + percent(syscalls_times, summary.endToEnd())
-                              + " of total time)"));
+                              plural(summary.numSyscalls(), "call"),
+                              percent(syscalls_times, summary.endToEnd())
+                              + " of total time"));
         super.addItem(timings);
       }
     }

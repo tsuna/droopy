@@ -12,6 +12,8 @@
 // see <http://www.gnu.org/licenses/>.
 package viewer;
 
+import java.util.Arrays;
+
 import com.google.gwt.user.client.ui.HorizontalPanel;
 import com.google.gwt.user.client.ui.InlineLabel;
 import com.google.gwt.user.client.ui.Tree;
@@ -38,7 +40,18 @@ public class AlignedTree extends Tree {
   }
 
   private static boolean needRightAlign(final String s) {
-    return s.endsWith("ms");
+    return s.endsWith("ms")
+      || (!s.isEmpty() && Character.isDigit(s.charAt(0)));
+  }
+
+  private static boolean addAutoAlign(final HBox row, final String s) {
+    if (needRightAlign(s)) {
+      row.addRight(label(s));
+      return true;
+    } else {
+      row.add(label(s));
+      return false;
+    }
   }
 
   public void addRow(final String a, final String b) {
@@ -48,11 +61,7 @@ public class AlignedTree extends Tree {
   public static HBox row(final String a, final String b) {
     final HBox row = new HBox();
     row.add(label(a));
-    if (needRightAlign(b)) {
-      row.addRight(label(b));
-    } else {
-      row.add(label(b));
-    }
+    addAutoAlign(row, b);
     return row;
   }
 
@@ -63,11 +72,10 @@ public class AlignedTree extends Tree {
   public static HBox row(final String a, final String b, final String c) {
     final HBox row = new HBox();
     row.add(label(a));
-    row.add(label(b));
-    if (needRightAlign(c)) {
+    if (addAutoAlign(row, b)) {
       row.addRight(label(c));
     } else {
-      row.add(label(c));
+      addAutoAlign(row, c);
     }
     return row;
   }
@@ -79,12 +87,16 @@ public class AlignedTree extends Tree {
   public static HBox row(final String a, final String b, final String c, final String d) {
     final HBox row = new HBox();
     row.add(label(a));
-    row.add(label(b));
-    row.add(label(c));
-    if (needRightAlign(d)) {
+    boolean align_right = addAutoAlign(row, b);
+    if (align_right) {
+      row.addRight(label(c));
+    } else {
+      align_right = addAutoAlign(row, c);
+    }
+    if (align_right) {
       row.addRight(label(d));
     } else {
-      row.add(label(d));
+      addAutoAlign(row, d);
     }
     return row;
   }
@@ -100,11 +112,19 @@ public class AlignedTree extends Tree {
     }
 
     // 1st pass: find the max width for each "column".
-    final int widths[] = new int[first.getWidgetCount()];
+    int[] widths = new int[first.getWidgetCount()];
     for (final Widget w : this) {
       if (w instanceof HorizontalPanel) {
         final HorizontalPanel h = (HorizontalPanel) w;
-        for (int i = 0; i < Math.min(widths.length, h.getWidgetCount()); i++) {
+        final int n = h.getWidgetCount();
+        if (n > widths.length) {
+          // Uh?  There's no Arrays.copyOf in GWT's emulated JRE.  WTF?
+          //widths = Arrays.copyOf(widths, n);
+          final int[] old = widths;
+          widths = new int[n];
+          System.arraycopy(old, 0, widths, 0, old.length);
+        }
+        for (int i = 0; i < n; i++) {
           final int width = h.getWidget(i).getOffsetWidth();
           if (width > widths[i]) {
             widths[i] = width;
@@ -122,7 +142,8 @@ public class AlignedTree extends Tree {
     for (final Widget w : this) {
       if (w instanceof HorizontalPanel) {
         final HorizontalPanel h = (HorizontalPanel) w;
-        for (int i = 0; i < Math.min(widths.length, h.getWidgetCount()); i++) {
+        final int n = h.getWidgetCount();
+        for (int i = 0; i < n; i++) {
           h.setCellWidth(h.getWidget(i), widths[i] + "px");
         }
       }
