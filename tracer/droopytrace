@@ -440,7 +440,7 @@ def straceprof(input, options):
                       "count": syscalls_count[syscall]})
     data["syscalls_times"] = timings
     if prev_slowest is not None:
-      data["prev_slowest"] = jsonify_syscall(*prev_slowest),
+      data["prev_slowest"] = jsonify_syscall(*prev_slowest)
     be_reqs = []
     for (host, ip), be_calls in backend_reqs.iteritems():
       transformed_calls = []
