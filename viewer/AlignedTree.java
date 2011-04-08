@@ -13,19 +13,45 @@
 package viewer;
 
 import java.util.Arrays;
+import java.util.Iterator;
 
+import com.google.gwt.user.client.ui.HasTreeItems;
 import com.google.gwt.user.client.ui.HorizontalPanel;
 import com.google.gwt.user.client.ui.InlineLabel;
 import com.google.gwt.user.client.ui.Tree;
 import com.google.gwt.user.client.ui.TreeItem;
 import com.google.gwt.user.client.ui.Widget;
 
+/**
+ * Like a {@link Tree} but can align {@link HorizontalPanel} items.
+ * The idea here is to have something that's a {@link Tree} but that looks
+ * like a table.  The idea is to achieve something somewhat like a
+ * {@link http://code.google.com/p/google-web-toolkit-incubator/wiki/TreeTable TreeTable}
+ * except it's simpler and a bit hackish.
+ *
+ * First, the tree is rendered once normally.  Once that's done, you can call
+ * {@link #align()} to align all the {@link HorizontalPanel} items in the
+ * tree.  This causes the tree to be rendered again, and users might notice
+ * the double-rendering in a short flicker.  Not super efficient, but gets the
+ * job done without having to copy-paste-edit the code of {@link Tree} and
+ * {@link TreeItem} as I've seen some GWT projects do.
+ *
+ * This class also provides a number of static methods to add rows to the
+ * tree table.  It's OK to have rows with a variable number of columns.
+ *
+ * Note: if you create and populate an aligned tree, especially in the event
+ * loop, you can't align it immediately.  You have to defer the call to
+ * {@link #align()} since the tree needs to be rendered first, so that we can
+ * tell what size each widget in the tree has.  Sorry :-/
+ */
 public class AlignedTree extends Tree {
+
+  private static final int DEFAULT_SPACING = 5;  // pixels.
 
   private final int spacing;
 
   public AlignedTree() {
-    this(5);
+    this(DEFAULT_SPACING);
   }
 
   public AlignedTree(final int spacing) {
@@ -56,6 +82,12 @@ public class AlignedTree extends Tree {
 
   public void addRow(final String a, final String b) {
     addItem(row(a, b));
+  }
+
+  public static HBox row(final String a) {
+    final HBox row = new HBox();
+    addAutoAlign(row, a);
+    return row;
   }
 
   public static HBox row(final String a, final String b) {
@@ -106,14 +138,22 @@ public class AlignedTree extends Tree {
    * This essentially helps make the tree look like a table with columns.
    */
   public void align() {
-    final HorizontalPanel first = findFirstHBox();
+    align(this, spacing);
+  }
+
+  public static void align(final HasTreeItems tree) {
+    align(tree, DEFAULT_SPACING);
+  }
+
+  public static void align(final HasTreeItems tree, final int spacing) {
+    final HorizontalPanel first = findFirstHBox(tree);
     if (first == null) {
       return;
     }
 
     // 1st pass: find the max width for each "column".
     int[] widths = new int[first.getWidgetCount()];
-    for (final Widget w : this) {
+    for (final Widget w : iter(tree)) {
       if (w instanceof HorizontalPanel) {
         final HorizontalPanel h = (HorizontalPanel) w;
         final int n = h.getWidgetCount();
@@ -139,7 +179,7 @@ public class AlignedTree extends Tree {
     }
 
     // 2nd pass: set the width on every cell in each row.
-    for (final Widget w : this) {
+    for (final Widget w : iter(tree)) {
       if (w instanceof HorizontalPanel) {
         final HorizontalPanel h = (HorizontalPanel) w;
         final int n = h.getWidgetCount();
@@ -150,13 +190,56 @@ public class AlignedTree extends Tree {
     }
   }
 
-  private HorizontalPanel findFirstHBox() {
-    for (final Widget w : this) {
+  private static HorizontalPanel findFirstHBox(final HasTreeItems tree) {
+    for (final Widget w : iter(tree)) {
       if (w instanceof HorizontalPanel) {
         return (HorizontalPanel) w;
       }
     }
     return null;
+  }
+
+  private static Iterable<Widget> iter(final HasTreeItems tree) {
+    if (tree instanceof Tree) {
+      return (Tree) tree;
+    } else if (tree instanceof TreeItem) {
+      return new TreeItemIterator((TreeItem) tree);
+    } else {
+      throw new AssertionError("should never happen!  tree is neither a"
+                               + " TreeItem nor a Iterable: " + tree);
+    }
+  }
+
+  /**
+   * Helper to iterate on {@link TreeItem}s.
+   * It seems like an oversight to have {@link Tree} implement the
+   * {@code HasWidgets} interface, but not {@link TreeItem}...
+   */
+  private static final class TreeItemIterator implements Iterable<Widget>, Iterator<Widget> {
+
+    private final TreeItem tree;
+    private int current;
+
+    public TreeItemIterator(final TreeItem tree) {
+      this.tree = tree;
+    }
+
+    public Iterator<Widget> iterator() {
+      return this;
+    }
+
+    public boolean hasNext() {
+      return current < tree.getChildCount();
+    }
+
+    public Widget next() {
+      return tree.getChild(current++).getWidget();
+    }
+
+    public void remove() {
+      tree.removeItem(tree.getChild(current));
+    }
+
   }
 
 }
