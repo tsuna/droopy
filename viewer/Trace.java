@@ -12,11 +12,16 @@
 // see <http://www.gnu.org/licenses/>.
 package viewer;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+
 import com.google.gwt.core.client.JavaScriptObject;
 import com.google.gwt.core.client.JsArray;
 import com.google.gwt.core.client.Scheduler;
 import com.google.gwt.i18n.client.NumberFormat;
 import com.google.gwt.json.client.JSONObject;
+import com.google.gwt.user.client.ui.HasTreeItems;
 import com.google.gwt.user.client.ui.TreeItem;
 import com.google.gwt.user.client.ui.Widget;
 
@@ -35,10 +40,23 @@ public final class Trace extends JavaScriptObject {
   public native int numCliWrite() /*-{ return this.num_cli_write }-*/;
   public native double writeTime() /*-{ return this.write_time }-*/;
   public native JsArray<SyscallTime> syscallsTimes() /*-{ return this.syscalls_times }-*/;
+  public native JsArray<BackendReqs.JSO> backendReqs() /*-{ return this.backend_reqs }-*/;
 
   private native void sortSyscallTimes() /*-{
     this.syscalls_times.sort(function(a, b) { return b.time - a.time })
   }-*/;
+
+  public ArrayList<BackendReqs> backendRequests() {
+    final JsArray<BackendReqs.JSO> jsos = backendReqs();
+    if (jsos == null) {
+      return null;
+    }
+    final ArrayList<BackendReqs> be_reqs = new ArrayList<BackendReqs>(jsos.length());
+    for (final BackendReqs.JSO jso : JsArrayIterator.iter(jsos)) {
+      be_reqs.add(new BackendReqs(jso));
+    }
+    return be_reqs;
+  }
 
   /** Returns the widget associated with this trace.  */
   public Widget widget(final Summary summary) {
@@ -129,7 +147,8 @@ public final class Trace extends JavaScriptObject {
       {
         final Syscall slowest = summary.slowestSyscall();
         final TreeItem tree = new TreeItem();
-        tree.setWidget(row("Slowest syscall:", slowest.name(), fmt(slowest.duration())));
+        tree.setWidget(row("Slowest syscall: " + slowest.name(),
+                           fmt(slowest.duration())));
         tree.addItem(new FixedWidth(slowest.call()));
         if (summary.hasSlowBackend()) {
           final ConnectCall connect = summary.prevConnect();
@@ -147,22 +166,91 @@ public final class Trace extends JavaScriptObject {
         }
         super.addItem(tree);
       }
+
+      // Backend calls.
+      {
+        final ArrayList<BackendReqs> be_reqs = backendRequests();
+        if (be_reqs != null) {
+          Collections.sort(be_reqs);
+          int num_be_calls = 0;
+          double total_time = 0;
+          for (final BackendReqs reqs : be_reqs) {
+            num_be_calls += reqs.calls().length();
+            total_time += reqs.totalTime();
+          }
+
+          final TreeItem important = new TreeItem();
+          important.setWidget(row("Time spent interacting with "
+                                  + plural(be_reqs.size(), "backend"),
+                                  fmt(total_time),
+                                  plural(num_be_calls, "call"),
+                                  percent(total_time, summary.endToEnd())
+                                  + " of total time"));
+          final TreeItem negligible = new TreeItem();
+          double cumul_time = 0;  // How much cumulative time we have so far.
+          double negligible_time = 0;  // How much time spent in the long tail.
+          int negligible_calls = 0;
+          for (final BackendReqs reqs : be_reqs) {
+            // Make sure we grab at least the top 3 calls by time spent,
+            // and then consider any of the top N% calls to be important.
+            final TreeItem chosen;
+            if (important.getChildCount() > 3
+                && cumul_time / total_time > 0.8) {
+              chosen = negligible;
+              negligible_time += reqs.totalTime();
+              negligible_calls += reqs.calls().length();
+            } else {
+              chosen = important;
+              cumul_time += reqs.totalTime();
+            }
+            final TreeItem be = new LazyTreeItem(row(reqs.peer(), fmt(reqs.totalTime()),
+                                                     plural(reqs.calls().length(), "call"))) {
+              protected void onFirstOpen() {
+                removeItems();
+                for (final Syscall req : reqs) {
+                  final HBox call = row(fmt(req.duration()));
+                  call.add(new FixedWidth(" " + req.call()));
+                  addItem(call);
+                }
+                deferredAlign(this);
+              }
+
+              protected void onOpen() {
+              }
+
+              protected void onClose() {
+              }
+            };
+            chosen.addItem(be);
+          }
+          negligible.setWidget(row(plural(negligible.getChildCount(),
+                                          "negligible backend"), fmt(negligible_time),
+                                   plural(negligible_calls, "call")));
+          important.addItem(negligible);
+          super.addItem(important);
+        }
+      }
     }
 
     protected void doAttachChildren() {
       super.doAttachChildren();
-      // We need to align the tree outside of the processing of this event,
-      // otherwise the browser won't have actually computed the layout of the
-      // Tree, and the nested widgets will appear to have a size of 0.
-      // It's kind of ugly because it means the browser does the layout once,
-      // then we "fix" it by aligning widgets, so users can see the layout
-      // flicker a bit after we "fix" it, but I don't know of a better way...
-      Scheduler.get().scheduleDeferred(new Scheduler.ScheduledCommand() {
-        public void execute() {
-          align();
-        }
-      });
+      deferredAlign(this);
     }
+
+  }
+
+  private static void deferredAlign(final HasTreeItems tree) {
+    // We need to align the tree outside of the processing of this event,
+    // otherwise the browser won't have actually computed the layout of the
+    // Tree, and the nested widgets will appear to have a size of 0.
+    // It's kind of ugly because it means the browser does the layout once,
+    // then we "fix" it by aligning widgets, so users can see the layout
+    // flicker a bit after we "fix" it, but I don't know of a better way...
+    Scheduler.get().scheduleDeferred(new Scheduler.ScheduledCommand() {
+      public void execute() {
+        AlignedTree.align(tree);
+      }
+    });
   }
 
 }
@@ -176,5 +264,53 @@ final class SyscallTime extends JavaScriptObject {
   public native double time() /*-{ return this.time }-*/;
   // This field was added later, so it might not always be present.
   public native int count() /*-{ return this.hasOwnProperty("count") && this.count || 0 }-*/;
+
+}
+
+final class BackendReqs implements Comparable<BackendReqs>, Iterable<Syscall> {
+
+  private final double total_time;
+  private final JSO jso;
+
+  public BackendReqs(final JSO jso) {
+    this.jso = jso;
+    double t = 0;
+    for (final Syscall call : JsArrayIterator.iter(calls())) {
+      t += call.duration();
+    }
+    this.total_time = t;
+  }
+
+  // Needs to be wrapped because we can't add extra members into JSOs.
+  static final class JSO extends JavaScriptObject {
+
+    protected JSO() {
+    }
+
+    native String peer() /*-{ return this.peer }-*/;
+    native JsArray<Syscall> calls() /*-{ return this.calls }-*/;
+
+  }
+
+  public String peer() {
+    return jso.peer();
+  }
+
+  public JsArray<Syscall> calls() {
+    return jso.calls();
+  }
+
+  public double totalTime() {
+    return total_time;
+  }
+
+  public Iterator<Syscall> iterator() {
+    return JsArrayIterator.iter(calls());
+  }
+
+  /** Compares in descending order of total time spent with this backend.  */
+  public int compareTo(final BackendReqs other) {
+    return Double.compare(other.total_time, total_time);
+  }
 
 }
