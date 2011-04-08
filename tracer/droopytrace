@@ -17,7 +17,7 @@
 # All the timestamps and durations in the script are in milliseconds unless
 # noted otherwise.
 
-"""Parses useful stats out of logs from `strace -tttTs999 -p <pid>'"""
+"""Parses useful stats out of logs from `strace -tttTs300 -p <pid>'"""
 
 from __future__ import with_statement
 
@@ -91,7 +91,7 @@ class strace(object):
     self.pid = pid
 
   def __enter__(self):
-    self.proc = popen(["strace", "-tttTs999", "-p", str(self.pid)])
+    self.proc = popen(["strace", "-tttTs300", "-p", str(self.pid)])
     self.proc.stdin.close()
     self.proc.stdout.close()
     return self
