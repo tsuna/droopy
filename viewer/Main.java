@@ -80,9 +80,16 @@ final class Main implements EntryPoint {
     public final void onResponseReceived(final Request request, final Response response) {
       final String text = response.getText();
       if (text.isEmpty()) {
-        onError(request, new RuntimeException("Empty response from server: "
-                                              + response.getStatusCode()
-                                              + " " + response.getStatusText()));
+        final int code = response.getStatusCode();
+        final String errmsg;
+        if (code == 0) {  // Happens when a cross-domain request fails to connect.
+          errmsg = ("Failed to connect to " + server + ", check that the server"
+                    + " is up and that you can connect to it.");
+        } else {
+          errmsg = ("Empty response from server: code=" + code
+                    + " status=" + response.getStatusText());
+        }
+        onError(request, new RuntimeException(errmsg));
       } else {
         JSONValue value;
         try {
