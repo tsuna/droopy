@@ -41,6 +41,7 @@ public final class Summary extends JavaScriptObject {
     return typeof this.prev_slowest.sort == "function" ? this.prev_slowest[0] : this.prev_slowest
   }-*/;
   public native ConnectCall prevConnect() /*-{ return this.prev_connect }-*/;
+  public native boolean apacheClosed() /*-{ return this.apache_closed }-*/;
 
   public boolean hasPrevSlowest() {
     return prevSlowest() != null;
@@ -83,8 +84,6 @@ public final class Summary extends JavaScriptObject {
       super.add(label(method()));
       super.add(label(resource()));
       super.add(label(fmt(endToEnd())), HBox.ALIGN_RIGHT);
-      super.add(label("in " + numSyscalls() + " syscalls"),
-                HBox.ALIGN_RIGHT);
       final Syscall slowest = slowestSyscall();
       final String slowdesc;
       if (hasSlowBackend()) {

@@ -44,6 +44,7 @@ import com.google.gwt.user.client.DOM;
 import com.google.gwt.user.client.Element;
 import com.google.gwt.user.client.History;
 import com.google.gwt.user.client.Window;
+import com.google.gwt.user.client.ui.Button;
 import com.google.gwt.user.client.ui.CheckBox;
 import com.google.gwt.user.client.ui.HorizontalPanel;
 import com.google.gwt.user.client.ui.InlineLabel;
@@ -64,11 +65,16 @@ final class Main implements EntryPoint {
   private static final DateTimeFormat FULLDATE =
     DateTimeFormat.getFormat("yyyy/MM/dd-HH:mm:ss");
 
+  /** Max number of results we'll fetch from ES.  */
+  private static final short MAX_RESULTS = 200;
+  private static final short DEFAULT_RESULTS = 20;
+
   private String server;
 
   private final VerticalPanel root = new VerticalPanel();
   private final InlineLabel status = new InlineLabel();
   private final AlignedTree traces = new AlignedTree();
+  private short nresults = DEFAULT_RESULTS;  // How many traces we want.
 
   private final DateTimeBox start_datebox = new DateTimeBox();
   private final DateTimeBox end_datebox = new DateTimeBox();
@@ -267,6 +273,19 @@ final class Main implements EntryPoint {
         if ((value = params.get("end")) != null) {
           end_datebox.getTextBox().setValue(value.get(0));
         }
+        if ((value = params.get("results")) != null) {
+          short n;
+          try {
+            n = Short.valueOf(value.get(0));
+          } catch (NumberFormatException e) {
+            n = -1;
+          }
+          if (0 < n && n < MAX_RESULTS) {
+            nresults = n;
+          }
+        } else {
+          nresults = DEFAULT_RESULTS;
+        }
         loadTraces();
       }
     };
@@ -291,7 +310,6 @@ final class Main implements EntryPoint {
     if (end != null) {
       token.append("&end=").append(FULLDATE.format(end));
     }
-    final String tok = token.toString();
     History.newItem(token.toString());
   }
 
@@ -303,7 +321,7 @@ final class Main implements EntryPoint {
       request_ts.add("to", toMillis(end_datebox));
     }
     final String json = object()
-      .add("size", 10)  // XXX
+      .add("size", nresults)
       .add("sort", Json.array()
            .add("request_ts", object("order", "desc")))
       .add("query",
@@ -349,6 +367,17 @@ final class Main implements EntryPoint {
       if (expanded.remove(id)) {  // If this trace ID should be expanded...
         trace.setState(true);     // then expand it now.
       }
+    }
+    if (nresults < MAX_RESULTS && summaries.total() > nresults) {
+      final Button more = new Button("Load more traces", new ClickHandler() {
+        public void onClick(final ClickEvent event) {
+          nresults += 20;
+          traces.getItem(traces.getItemCount() - 1).setText("Loading...");
+          replaceHistoryTokens("results", Short.toString(nresults));
+          loadTraces();
+        }
+      });
+      traces.addItem(more);
     }
     traces.align();
     // IDs that haven't been expanded are no longer displayed,
@@ -452,6 +481,13 @@ final class Main implements EntryPoint {
 
   private static final Map<String, List<String>> parseQueryString(final String querystring) {
     return QueryStringDecoder.getParameters(querystring);
+  }
+
+  private static void replaceHistoryTokens(final String key, final String value) {
+    for (final String remove : getHistoryTokens(key)) {
+      removeHistoryToken(key, remove);
+    }
+    appendHistoryToken(key, value);
   }
 
   // ------------- //
