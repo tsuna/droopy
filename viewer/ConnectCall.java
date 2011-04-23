@@ -29,6 +29,8 @@ public final class ConnectCall extends JavaScriptObject {
   public native boolean client() /*-{ return this.hasOwnProperty("client") && this.client }-*/;
 
   public native String peer() /*-{ return this.peer }-*/;
+  // This field was added later, so it might be undefined (null).
+  public native String host() /*-{ return this.host }-*/;
   public native int retv() /*-{ return this.retv }-*/;
   public native String call() /*-{ return this.call }-*/;
   public native int timestamp() /*-{ return this.timestamp }-*/;

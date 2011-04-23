@@ -650,9 +650,20 @@ def jsonify_syscall(duration, name, retv, call, ts=None):
   return result
 
 
+def getfqdn(host):
+  # On OSX, for whatever reason, calling socket.getfqdn with "(foo)" in
+  # argument locks up the Python interpreter pretty hard.  It gets stuck
+  # in kevent, called by _mdns_query_mDNSResponder.  Really odd.
+  if host and host[0] == "(":
+    return host
+  return socket.getfqdn(host)
+
+
 def jsonify_connect(ts, (host, port), retv, call):
+  fqdn = getfqdn(host)
   return {
-    "peer": pretty_peer((host, port)),
+    "peer": "%s:%d" % (host, port),
+    "host": fqdn,
     "retv": retv,
     "call": call,
     "timestamp": ts,

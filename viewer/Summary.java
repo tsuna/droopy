@@ -55,7 +55,8 @@ public final class Summary extends JavaScriptObject {
     if (call.client()) {
       return "(to client)";
     }
-    return call.peer();
+    final String host = call.host();
+    return host != null ? host : call.peer();
   }
 
   public boolean hasSlowBackend() {
