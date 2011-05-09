@@ -49,8 +49,9 @@ GWT_DEPS = third_party/gwt/gwt-servlet-deps-$(GWT_VERSION).jar
 JAVAX_VALIDATION_VERSION = 1.0.0.GA
 JAVAX_VALIDATION = third_party/javax/validation-api-$(JAVAX_VALIDATION_VERSION).jar
 JAVAX_VALIDATION_SRC = third_party/javax/validation-api-$(JAVAX_VALIDATION_VERSION)-sources.jar
-DEPS = $(GWT_DEV) $(GWT_SDK) $(GWT_DEPS) $(JAVAX_VALIDATION) $(JAVAX_VALIDATION_SRC)
-CP = $(GWT_DEV):$(GWT_SDK):$(GWT_DEPS):$(JAVAX_VALIDATION):$(JAVAX_VALIDATION_SRC):.
+GWT_VISUALIZATION = third_party/gwt/gwt-visualization-1.1.2.jar
+DEPS = $(GWT_DEV) $(GWT_SDK) $(GWT_DEPS) $(JAVAX_VALIDATION) $(JAVAX_VALIDATION_SRC) $(GWT_VISUALIZATION)
+CP = $(GWT_DEV):$(GWT_SDK):$(GWT_DEPS):$(JAVAX_VALIDATION):$(JAVAX_VALIDATION_SRC):$(GWT_VISUALIZATION):.
 GWTC_JVM_ARGS =  # add jvmarg -Xss16M or similar if you see a StackOverflowError
 GWTC_ARGS = -ea  # Additional arguments like -style PRETTY or -logLevel DEBUG
 

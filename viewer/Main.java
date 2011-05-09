@@ -20,6 +20,8 @@ import java.util.Map;
 
 import com.google.gwt.core.client.EntryPoint;
 import com.google.gwt.core.client.JavaScriptObject;
+import com.google.gwt.core.client.JsArray;
+import com.google.gwt.dom.client.Style;
 import com.google.gwt.event.dom.client.ClickEvent;
 import com.google.gwt.event.dom.client.ClickHandler;
 import com.google.gwt.event.dom.client.DomEvent;
@@ -44,6 +46,7 @@ import com.google.gwt.user.client.DOM;
 import com.google.gwt.user.client.Element;
 import com.google.gwt.user.client.History;
 import com.google.gwt.user.client.Window;
+import com.google.gwt.user.client.rpc.AsyncCallback;
 import com.google.gwt.user.client.ui.Button;
 import com.google.gwt.user.client.ui.CheckBox;
 import com.google.gwt.user.client.ui.HorizontalPanel;
@@ -53,7 +56,9 @@ import com.google.gwt.user.client.ui.TextBox;
 import com.google.gwt.user.client.ui.Tree;
 import com.google.gwt.user.client.ui.TreeItem;
 import com.google.gwt.user.client.ui.VerticalPanel;
-import com.google.gwt.user.client.rpc.AsyncCallback;
+import com.google.gwt.visualization.client.DataTable;
+import com.google.gwt.visualization.client.VisualizationUtils;
+import com.google.gwt.visualization.client.visualizations.corechart.PieChart;
 
 import static viewer.Json.object;
 
@@ -73,6 +78,7 @@ final class Main implements EntryPoint {
 
   private final VerticalPanel root = new VerticalPanel();
   private final InlineLabel status = new InlineLabel();
+  private final VerticalPanel chart = new VerticalPanel();
   private final AlignedTree traces = new AlignedTree();
   private short nresults = DEFAULT_RESULTS;  // How many traces we want.
 
@@ -114,6 +120,15 @@ final class Main implements EntryPoint {
    * This is the entry point method.
    */
   public void onModuleLoad() {
+    final class Start implements Runnable {
+      public void run() {
+        onModuleLoadReal();
+      }
+    }
+    VisualizationUtils.loadVisualizationApi(new Start(), "corechart");
+  }
+
+  private void onModuleLoadReal() {
     server = getServer();
     if (server == null) {
       promptForServerUi();
@@ -121,7 +136,9 @@ final class Main implements EntryPoint {
     }
     status.setText("Checking server health...");
     root.add(status);
+    chart.getElement().getStyle().setFloat(Style.Float.RIGHT);
     removeLoadingMessage();
+    RootPanel.get().add(chart);
     RootPanel.get().add(root);
     ajax("/droopy/_status", new AjaxCallback() {
       public void onSuccess(final JSONValue response) {
@@ -314,6 +331,7 @@ final class Main implements EntryPoint {
   }
 
   private void loadTraces() {
+    chart.clear();
     status.setText("Loading...");
     final Json request_ts = object()
       .add("from", toMillis(start_datebox));
@@ -333,6 +351,10 @@ final class Main implements EntryPoint {
                         )
                  )
           )
+      .add("facets",
+           object("slowbe",
+                  object("terms", object("field", "prev_connect.host")))
+           )
       .toString();
     ajax("/droopy/summary/_search", json,
           new AjaxCallback() {
@@ -340,9 +362,36 @@ final class Main implements EntryPoint {
         final ESResponse<Summary> resp = ESResponse.fromJson(response.isObject());
         status.setText("Found " + resp.hits().total() + " traces in "
                        + resp.took() + "ms");
+        renderChart(resp.<ESResponse.TermFacet>facets("slowbe"));
         renderTraces(resp.hits());
       }
     });
+  }
+
+  private void renderChart(final ESResponse.Facets<ESResponse.TermFacet> facets) {
+    if (facets == null) {
+      return;
+    }
+    final DataTable data = DataTable.create();
+    data.addColumn(DataTable.ColumnType.STRING, "Backend");
+    data.addColumn(DataTable.ColumnType.NUMBER, "Number of times slowest");
+    final JsArray<ESResponse.TermFacet> terms = facets.terms();
+    final int nterms = terms.length();
+    data.addRows(nterms);
+    for (int i = 0; i < nterms; i++) {
+      final ESResponse.TermFacet facet = terms.get(i);
+      final String backend = facet.term();
+      if ("unknown".equals(backend)) {
+        continue;
+      }
+      data.setValue(i, 0, backend);
+      data.setValue(i, 1, facet.count());
+    }
+    final PieChart.PieOptions options = PieChart.createPieOptions();
+    options.setWidth(400);
+    options.setHeight(240);
+    options.setTitle("Slowest Backends");
+    chart.add(new PieChart(data, options));
   }
 
   private void renderTraces(final ESResponse.Hits<Summary> summaries) {

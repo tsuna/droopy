@@ -37,6 +37,8 @@ public final class ESResponse<T extends JavaScriptObject> extends JavaScriptObje
   public native boolean timedOut() /*-{ return this.timed_out }-*/;
   //public static final native Shards hits() /*-{ return this._shards }-*/;
   public native Hits<T> hits() /*-{ return this.hits }-*/;
+  public native <F extends Facet> Facets<F> facets(final String name)
+  /*-{ return this.facets == null ? null : this.facets[name] }-*/;
 
   public static final class Hits<T extends JavaScriptObject> extends JavaScriptObject {
     protected Hits() {}
@@ -59,6 +61,27 @@ public final class ESResponse<T extends JavaScriptObject> extends JavaScriptObje
     public native String type() /*-{ return this._type }-*/;
     public native String id() /*-{ return this._id }-*/;
     public native T source() /*-{ return this._source }-*/;
+  }
+
+  public static abstract class Facet extends JavaScriptObject {
+    protected Facet() {}
+  }
+
+  public static final class Facets<T extends Facet> extends JavaScriptObject {
+    protected Facets() {}
+    public native int missing() /*-{ return this.missing }-*/;
+    public native JsArray<T> terms() /*-{ return this.terms }-*/;
+
+    // Can't implement the Iterable interface due to GWT bug #4864.
+    public Iterable<T> iterator() {
+      return new JsArrayIterator(terms());
+    }
+  }
+
+  public static final class TermFacet extends Facet {
+    protected TermFacet() {}
+    public native String term() /*-{ return this.term }-*/;
+    public native int count() /*-{ return this.count }-*/;
   }
 
 }
