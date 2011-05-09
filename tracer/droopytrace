@@ -249,6 +249,7 @@ def parse_call(line):
 
 def parse_http_request(line):
   # Parse the request out.
+  resource = i = None
   try:
     request = line[line.index('"', 24)+1:line.rindex('"', 0, -10)]
     method = request[:request.index(" ", 3)]
@@ -260,10 +261,12 @@ def parse_http_request(line):
     # If we have a query string, remove it.
     i = resource.find("?", len(method) + 1)
     if i < 0:  # If there's no query string, remove at least the " HTTP/1.x"
-      i = resource.rindex(" ")
-    resource = resource[:i]
+      i = resource.rfind(" ")
+    if i > 0:
+      resource = resource[:i]
   except ValueError:
-    print >>sys.stderr, "parse_http_request line=%r" % (line,)
+    print >>sys.stderr, ("parse_http_request line=%r, resource=%r, i=%r"
+                         % (line, resource, i))
     raise
   return request, method, resource
 
