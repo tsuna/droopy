@@ -63,8 +63,18 @@ abstract class EventsHandler implements BlurHandler, ChangeHandler,
     scheduleEvent(event);
   }
 
+  // Returns the key code of a key press event, work around for GWT bug #5558.
+  private static int getKeyCode(final KeyPressEvent event) {
+    final int code = event.getUnicodeCharCode();
+    if (code != 0) {
+      return code;
+    }
+    // According to bug #5558, this might confuse '(' and 'down arrow'.
+    return event.getNativeEvent().getKeyCode();
+  }
+
   public final void onKeyPress(final KeyPressEvent event) {
-    if (event.getCharCode() == KeyCodes.KEY_ENTER) {
+    if (getKeyCode(event) == KeyCodes.KEY_ENTER) {
       scheduleEvent(event);
     }
   }
