@@ -84,6 +84,7 @@ final class Main implements EntryPoint {
 
   private final DateTimeBox start_datebox = new DateTimeBox();
   private final DateTimeBox end_datebox = new DateTimeBox();
+  private final TextBox esquery = new TextBox();
 
   private abstract class AjaxCallback implements RequestCallback/*AsyncCallback<JavaScriptObject>*/ {
     public void onError(final Request req, final Throwable e) {
@@ -252,6 +253,8 @@ final class Main implements EntryPoint {
     }
     hbox.add(new InlineLabel("To"));
     hbox.add(end_datebox);
+    hbox.add(new InlineLabel("Query"));
+    hbox.add(esquery);
     root.add(hbox);
     traces.setAnimationEnabled(true);
     root.add(traces);
@@ -277,6 +280,7 @@ final class Main implements EntryPoint {
       tb.addKeyPressHandler(refresh);
       end_datebox.addValueChangeHandler(vch);
     }
+    esquery.addKeyPressHandler(refresh);
   }
 
   private void setupHistory() {
@@ -289,6 +293,9 @@ final class Main implements EntryPoint {
         }
         if ((value = params.get("end")) != null) {
           end_datebox.getTextBox().setValue(value.get(0));
+        }
+        if ((value = params.get("q")) != null) {
+          esquery.setValue(value.get(0));
         }
         if ((value = params.get("results")) != null) {
           short n;
@@ -327,6 +334,9 @@ final class Main implements EntryPoint {
     if (end != null) {
       token.append("&end=").append(FULLDATE.format(end));
     }
+    if (!esquery.getValue().isEmpty()) {
+      token.append("&q=").append(esquery.getValue());
+    }
     History.newItem(token.toString());
   }
 
@@ -343,12 +353,12 @@ final class Main implements EntryPoint {
       .add("sort", Json.array()
            .add("request_ts", object("order", "desc")))
       .add("query",
-           object("constant_score",
-                  object("filter",
-                         object("numeric_range",
-                                object("request_ts", request_ts)
-                               )
-                        )
+           object("filtered", object("query", getESQuery())
+                  .add("filter",
+                       object("numeric_range",
+                              object("request_ts", request_ts)
+                             )
+                      )
                  )
           )
       .add("facets",
@@ -366,6 +376,15 @@ final class Main implements EntryPoint {
         renderTraces(resp.hits());
       }
     });
+  }
+
+  private Json getESQuery() {
+    final String q = esquery.getValue();
+    if (q.isEmpty()) {
+      return object("match_all", object());
+    }
+    return object("query_string", object("query", q)
+                  .add("default_operator", "AND"));
   }
 
   private void renderChart(final ESResponse.Facets<ESResponse.TermFacet> facets) {
