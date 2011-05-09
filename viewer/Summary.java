@@ -38,6 +38,9 @@ public final class Summary extends JavaScriptObject {
   // is an array in JavaScript.  I rely on duck typing here: if it's got a
   // "sort" function, then it's an array, otherwise it's an object.
   public native Syscall prevSlowest() /*-{
+    if (this.prev_slowest == undefined) {
+      return null;
+    }
     return typeof this.prev_slowest.sort == "function" ? this.prev_slowest[0] : this.prev_slowest
   }-*/;
   public native ConnectCall prevConnect() /*-{ return this.prev_connect }-*/;
