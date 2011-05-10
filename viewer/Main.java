@@ -364,6 +364,7 @@ final class Main implements EntryPoint {
       .add("facets",
            object()
            .add("slowbe", object("terms", object("field", "prev_connect.host")))
+           .add("betype", object("terms", object("field", "prev_connect.type")))
            //.add("lathisto", object("histogram",
            //                        object("field", "end_to_end").add("interval", 30)))
           )
@@ -376,7 +377,8 @@ final class Main implements EntryPoint {
                        + resp.took() + "ms");
 
         charts.clear();
-        renderChart(resp.<ESResponse.TermFacet>facets("slowbe"));
+        renderChart(resp.<ESResponse.TermFacet>facets("slowbe"), "Slowest Backend Hosts");
+        renderChart(resp.<ESResponse.TermFacet>facets("betype"), "Slowest Backend Types");
         renderLatencyHistogram(resp.<ESResponse.HistoFacet>facets("lathisto"));
         renderTraces(resp.hits());
       }
@@ -392,7 +394,8 @@ final class Main implements EntryPoint {
                   .add("default_operator", "AND"));
   }
 
-  private void renderChart(final ESResponse.Facets<ESResponse.TermFacet> facets) {
+  private void renderChart(final ESResponse.Facets<ESResponse.TermFacet> facets,
+                           final String title) {
     if (facets == null) {
       return;
     }
@@ -414,7 +417,7 @@ final class Main implements EntryPoint {
     final PieChart.PieOptions options = PieChart.createPieOptions();
     options.setWidth(400);
     options.setHeight(240);
-    options.setTitle("Slowest Backends");
+    options.setTitle(title);
     charts.add(new PieChart(data, options));
   }
 

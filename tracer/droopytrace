@@ -653,6 +653,25 @@ def jsonify_syscall(duration, name, retv, call, ts=None):
   return result
 
 
+PORT2SERVICE = {
+  25:    "smtp",
+  80:    "http",
+  443:   "https",
+  9090:  "thrift_hbase",
+}
+
+def get_host_type(host, port):
+  if port < 0:
+    return host.strip("()").replace("-", "_")
+  port = PORT2SERVICE.get(port, "port_%s" % port)
+  if host.startswith("10."):
+    return port
+  elif host.startswith("127."):
+    return "localhost_%" % port
+  else:  # Connection out to the intertubes.
+    return "external_%s" % port
+
+
 def getfqdn(host):
   # On OSX, for whatever reason, calling socket.getfqdn with "(foo)" in
   # argument locks up the Python interpreter pretty hard.  It gets stuck
@@ -667,6 +686,7 @@ def jsonify_connect(ts, (host, port), retv, call):
   return {
     "peer": "%s:%d" % (host, port),
     "host": fqdn,
+    "type": get_host_type(host, port),
     "retv": retv,
     "call": call,
     "timestamp": ts,
