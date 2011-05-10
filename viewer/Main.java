@@ -21,7 +21,6 @@ import java.util.Map;
 import com.google.gwt.core.client.EntryPoint;
 import com.google.gwt.core.client.JavaScriptObject;
 import com.google.gwt.core.client.JsArray;
-import com.google.gwt.dom.client.Style;
 import com.google.gwt.event.dom.client.ClickEvent;
 import com.google.gwt.event.dom.client.ClickHandler;
 import com.google.gwt.event.dom.client.DomEvent;
@@ -58,6 +57,9 @@ import com.google.gwt.user.client.ui.TreeItem;
 import com.google.gwt.user.client.ui.VerticalPanel;
 import com.google.gwt.visualization.client.DataTable;
 import com.google.gwt.visualization.client.VisualizationUtils;
+import com.google.gwt.visualization.client.visualizations.corechart.AxisOptions;
+import com.google.gwt.visualization.client.visualizations.corechart.ColumnChart;
+import com.google.gwt.visualization.client.visualizations.corechart.Options;
 import com.google.gwt.visualization.client.visualizations.corechart.PieChart;
 
 import static viewer.Json.object;
@@ -78,7 +80,7 @@ final class Main implements EntryPoint {
 
   private final VerticalPanel root = new VerticalPanel();
   private final InlineLabel status = new InlineLabel();
-  private final VerticalPanel chart = new VerticalPanel();
+  private final HorizontalPanel charts = new HorizontalPanel();
   private final AlignedTree traces = new AlignedTree();
   private short nresults = DEFAULT_RESULTS;  // How many traces we want.
 
@@ -137,9 +139,8 @@ final class Main implements EntryPoint {
     }
     status.setText("Checking server health...");
     root.add(status);
-    chart.getElement().getStyle().setFloat(Style.Float.RIGHT);
+    root.add(charts);
     removeLoadingMessage();
-    RootPanel.get().add(chart);
     RootPanel.get().add(root);
     ajax("/droopy/_status", new AjaxCallback() {
       public void onSuccess(final JSONValue response) {
@@ -341,7 +342,6 @@ final class Main implements EntryPoint {
   }
 
   private void loadTraces() {
-    chart.clear();
     status.setText("Loading...");
     final Json request_ts = object()
       .add("from", toMillis(start_datebox));
@@ -362,9 +362,11 @@ final class Main implements EntryPoint {
                  )
           )
       .add("facets",
-           object("slowbe",
-                  object("terms", object("field", "prev_connect.host")))
-           )
+           object()
+           .add("slowbe", object("terms", object("field", "prev_connect.host")))
+           //.add("lathisto", object("histogram",
+           //                        object("field", "end_to_end").add("interval", 30)))
+          )
       .toString();
     ajax("/droopy/summary/_search", json,
           new AjaxCallback() {
@@ -372,7 +374,10 @@ final class Main implements EntryPoint {
         final ESResponse<Summary> resp = ESResponse.fromJson(response.isObject());
         status.setText("Found " + resp.hits().total() + " traces in "
                        + resp.took() + "ms");
+
+        charts.clear();
         renderChart(resp.<ESResponse.TermFacet>facets("slowbe"));
+        renderLatencyHistogram(resp.<ESResponse.HistoFacet>facets("lathisto"));
         renderTraces(resp.hits());
       }
     });
@@ -410,7 +415,35 @@ final class Main implements EntryPoint {
     options.setWidth(400);
     options.setHeight(240);
     options.setTitle("Slowest Backends");
-    chart.add(new PieChart(data, options));
+    charts.add(new PieChart(data, options));
+  }
+
+  private void renderLatencyHistogram(final ESResponse.Facets<ESResponse.HistoFacet> facets) {
+    // Disabled because it triggers a JavaScript error in corechart.  See:
+    // http://groups.google.com/group/gwt-google-apis/browse_thread/thread/332a644b2e7e66fc
+
+    //if (facets == null) {
+    //  return;
+    //}
+    //final DataTable data = DataTable.create();
+    //data.addColumn(DataTable.ColumnType.NUMBER, "Latency");
+    //data.addColumn(DataTable.ColumnType.NUMBER, "Number of hits");
+    //final JsArray<ESResponse.HistoFacet> buckets = facets.terms();
+    //final int nbuckets = buckets.length();
+    //data.addRows(nbuckets);
+    //for (int i = 0; i < nbuckets; i++) {
+    //  final ESResponse.HistoFacet facet = buckets.get(i);
+    //  data.setValue(i, 0, facet.key());
+    //  data.setValue(i, 1, facet.count());
+    //}
+    //final Options options = ColumnChart.createOptions();
+    //options.setWidth(400);
+    //options.setHeight(240);
+    //options.setTitle("Response Latency");
+    //final AxisOptions axis = AxisOptions.create();
+    //axis.setTitle("Latency");
+    //options.setHAxisOptions(axis);
+    //charts.add(new ColumnChart(data, options));
   }
 
   private void renderTraces(final ESResponse.Hits<Summary> summaries) {

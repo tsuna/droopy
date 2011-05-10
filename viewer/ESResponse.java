@@ -84,4 +84,10 @@ public final class ESResponse<T extends JavaScriptObject> extends JavaScriptObje
     public native int count() /*-{ return this.count }-*/;
   }
 
+  public static final class HistoFacet extends Facet {
+    protected HistoFacet() {}
+    public native int key() /*-{ return this.key }-*/;
+    public native int count() /*-{ return this.count }-*/;
+  }
+
 }
