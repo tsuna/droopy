@@ -291,16 +291,10 @@ final class Main implements EntryPoint {
     final ValueChangeHandler<String> handler = new ValueChangeHandler<String>() {
       public void onValueChange(final ValueChangeEvent<String> event) {
         final Map<String, List<String>> params = parseQueryString(event.getValue());
+        setTextBox(start_datebox.getTextBox(), params.get("start"));
+        setTextBox(end_datebox.getTextBox(), params.get("end"));
+        setTextBox(esquery, params.get("q"));
         List<String> value;
-        if ((value = params.get("start")) != null) {
-          start_datebox.getTextBox().setValue(value.get(0));
-        }
-        if ((value = params.get("end")) != null) {
-          end_datebox.getTextBox().setValue(value.get(0));
-        }
-        if ((value = params.get("q")) != null) {
-          esquery.setValue(value.get(0));
-        }
         if ((value = params.get("results")) != null) {
           short n;
           try {
@@ -315,6 +309,14 @@ final class Main implements EntryPoint {
           nresults = DEFAULT_RESULTS;
         }
         loadTraces();
+      }
+
+      private void setTextBox(final TextBox box, final List<String> values) {
+        if (values != null) {
+          box.setValue(values.get(0));
+        } else {
+          box.setValue("");
+        }
       }
     };
     History.addValueChangeHandler(handler);
