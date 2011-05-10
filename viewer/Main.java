@@ -56,9 +56,12 @@ import com.google.gwt.user.client.ui.Tree;
 import com.google.gwt.user.client.ui.TreeItem;
 import com.google.gwt.user.client.ui.VerticalPanel;
 import com.google.gwt.visualization.client.DataTable;
+import com.google.gwt.visualization.client.Selection;
 import com.google.gwt.visualization.client.VisualizationUtils;
+import com.google.gwt.visualization.client.events.SelectHandler;
 import com.google.gwt.visualization.client.visualizations.corechart.AxisOptions;
 import com.google.gwt.visualization.client.visualizations.corechart.ColumnChart;
+import com.google.gwt.visualization.client.visualizations.corechart.CoreChart;
 import com.google.gwt.visualization.client.visualizations.corechart.Options;
 import com.google.gwt.visualization.client.visualizations.corechart.PieChart;
 
@@ -377,8 +380,10 @@ final class Main implements EntryPoint {
                        + resp.took() + "ms");
 
         charts.clear();
-        renderChart(resp.<ESResponse.TermFacet>facets("slowbe"), "Slowest Backend Hosts");
-        renderChart(resp.<ESResponse.TermFacet>facets("betype"), "Slowest Backend Types");
+        renderChart(resp.<ESResponse.TermFacet>facets("slowbe"),
+                    "Slowest Backend Hosts", "host");
+        renderChart(resp.<ESResponse.TermFacet>facets("betype"),
+                    "Slowest Backend Types", "type");
         renderLatencyHistogram(resp.<ESResponse.HistoFacet>facets("lathisto"));
         renderTraces(resp.hits());
       }
@@ -395,7 +400,7 @@ final class Main implements EntryPoint {
   }
 
   private void renderChart(final ESResponse.Facets<ESResponse.TermFacet> facets,
-                           final String title) {
+                           final String title, final String tag) {
     if (facets == null) {
       return;
     }
@@ -418,7 +423,48 @@ final class Main implements EntryPoint {
     options.setWidth(400);
     options.setHeight(240);
     options.setTitle(title);
-    charts.add(new PieChart(data, options));
+    final PieChart chart = new PieChart(data, options);
+    final SearchOnSelectHandler handler = new SearchOnSelectHandler(chart, data, tag);
+    chart.addSelectHandler(handler);
+    charts.add(chart);
+  }
+
+  private final class SearchOnSelectHandler extends SelectHandler {
+
+    /*
+     * Just wanna say: the select handler API is ridiculously bad.
+     * The SelectEvent we receive contains nothing, so we have to retain a
+     * reference to the chart manually in the handler.  But that's not enough
+     * because the chart doesn't have an API to access its data, so you also
+     * need to manually retain a reference to the data in the chart.  The data
+     * doesn't speak in Selection so you have to manually translate that into
+     * a row/column request.  Sigh.
+     */
+
+    private final CoreChart chart;
+    private final DataTable data;
+    private final String tag;
+
+    private SearchOnSelectHandler(final CoreChart chart,
+                                  final DataTable data,
+                                  final String tag) {
+      this.chart = chart;
+      this.data = data;
+      this.tag = tag + ":";
+    }
+
+    public void onSelect(final SelectEvent event) {
+      String qs = esquery.getValue();
+      for (final Selection selection : JsArrayIterator.iter(chart.getSelections())) {
+        if (!selection.isRow()) {
+          continue;
+        }
+        qs += ' ' + tag + data.getValueString(selection.getRow(), 0);
+      }
+      esquery.setValue(qs.trim());
+      refresh();
+    }
+
   }
 
   private void renderLatencyHistogram(final ESResponse.Facets<ESResponse.HistoFacet> facets) {
