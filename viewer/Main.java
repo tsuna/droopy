@@ -75,6 +75,9 @@ final class Main implements EntryPoint {
   private static final DateTimeFormat FULLDATE =
     DateTimeFormat.getFormat("yyyy/MM/dd-HH:mm:ss");
 
+  private static final DateTimeFormat INDEXDATE =
+    DateTimeFormat.getFormat("yyyyMM");
+
   /** Max number of results we'll fetch from ES.  */
   private static final short MAX_RESULTS = 200;
   private static final short DEFAULT_RESULTS = 20;
@@ -134,6 +137,11 @@ final class Main implements EntryPoint {
     VisualizationUtils.loadVisualizationApi(new Start(), "corechart");
   }
 
+  /** Returns the name of the index for this month.  */
+  private static String currentIndexName() {
+    return "droopy" + INDEXDATE.format(new Date());
+  }
+
   private void onModuleLoadReal() {
     server = getServer();
     if (server == null) {
@@ -152,7 +160,7 @@ final class Main implements EntryPoint {
             && resp.get("ok").isBoolean().booleanValue()) {
           status.setText("Server is ready, "
                          + (resp.get("indices").isObject()
-                            .get("droopy").isObject()
+                            .get(currentIndexName()).isObject()
                             .get("docs").isObject()
                             .get("num_docs")) + " traces available."
                          + "  Loading ...");
