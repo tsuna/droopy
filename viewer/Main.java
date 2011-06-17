@@ -253,7 +253,9 @@ final class Main implements EntryPoint {
     // If we're not trying to see anything already, look at some recent
     // traces by default.
     if (History.getToken().isEmpty()) {
-      start_datebox.setValue(new Date(System.currentTimeMillis() - 600000), true);
+      final long now = System.currentTimeMillis();
+      start_datebox.setValue(new Date(now - 600000), false);
+      end_datebox.setValue(new Date(now), true);
     }
     hbox.add(new InlineLabel("To"));
     hbox.add(end_datebox);
