@@ -42,6 +42,10 @@ except ImportError:
   json = None
 
 
+# UNIX username of the processes we want to trace, by default.
+DEFAULT_USER = "www-data"
+GEARMAN_DEFAULT_USER = "gearman"
+
 VALID_METHODS = set(["GET", "POST", "HEAD", "OPTIONS"])
 
 # We track the following syscalls that affect file descriptors.
@@ -108,19 +112,26 @@ class strace(object):
       self.proc.wait()
 
 
-def find_apache_worker(options):
-  proc = popen(["pgrep", "-u", options.user, "apache2"])
+def find_worker(options):
+  proc = ["pgrep", "-u", options.user, options.process_name]
+  if options.pgrep_args:
+    proc.insert(1, "-f")
+  proc = popen(proc)
   stdout, stderr = proc.communicate()
   retval = proc.wait()
   if retval == 1:
     if stderr:
       print >>sys.stderr, stderr,
-    print >>sys.stderr, ("No apache2 process found running as %s"
-                         % options.user)
+    print >>sys.stderr, ("No process matching %r found running as %s"
+                         % (options.process_name, options.user))
     sys.exit(1)
   elif retval:
     assert 0, "pgrep returned %d, stderr=%s" % (retval, stderr)
-  pid = int(stdout.splitlines()[-1])
+  stdout = stdout.splitlines()
+  pid = int(stdout[-1])
+  if pid == os.getpid():  # Don't trace ourselves, that's silly.
+    stdout.pop()
+    pid = int(stdout[-1])
   print "strace'ing PID %d" % pid
   return pid
 
@@ -204,6 +215,14 @@ def get_pre_existing_connections(options):
   print ("lsof'ed %d pre-existing TCP connections in %7.2fms"
          % (len(connected_fds), time.time() * 1000 - timestamp))
   return connected_fds
+
+
+def find_gearmand_socket(connected_fds):
+  """Looks for a socket connected to a gearman server."""
+  for fd, (timestamp, (host, port), retval, call) in connected_fds.iteritems():
+    if port == 7003:
+      return fd
+  return None
 
 
 def parse_call(line):
@@ -325,6 +344,7 @@ def straceprof(input, options):
   closed_cli = None  # Have we closed the connection to our client?
   request = None     # Raw HTTP request (possibly truncated).
   method = None      # HTTP method of the request.
+  resource = None    # HTTP resource requested
   first_read_ts = 0  # Timestamp of the 1st read from client_fd.
   cli_read_ts = 0    # Timestamp at which we read the request from client_fd.
   first_write_ts = 0 # Time at which we wrote the response to the client_fd.
@@ -475,6 +495,8 @@ def straceprof(input, options):
   connected_fds = getattr(options, "connected_fds", {})
   if connected_fds:
     del options.connected_fds
+    if options.gearman:
+      client_fd = find_gearmand_socket(connected_fds)
 
   for line in input:
     self_timing = time.time() * 1000
@@ -491,6 +513,9 @@ def straceprof(input, options):
 
     if syscall == "accept":
       client_fd = retval
+    elif (options.gearman and syscall == "connect"
+          and parse_connect(line)[1] == 7003):
+      client_fd = parse_fd(call, syscall)
     elif not client_fd:
       continue  # We don't know who we're talking to, skip until we do.
     else:
@@ -527,7 +552,7 @@ def straceprof(input, options):
       if cli_write_ts:
         end_to_end = cli_write_ts - cli_read_ts
 
-      if (cli_write_ts
+      if (cli_read_ts and cli_write_ts
           and (options.show_options or method != "OPTIONS")
           and (not options.grep or options.grep.search(resource))
           and (not options.min_lat or end_to_end >= options.min_lat)):
@@ -558,7 +583,11 @@ def straceprof(input, options):
         if calls:
           calls = [calls[-1]]  # Keep the read.
         first_read_ts = timestamp
-        request, method, resource = parse_http_request(line)
+        if options.gearman:
+          request = resource = call
+          method = "(gearman)"
+        else:
+          request, method, resource = parse_http_request(line)
       # else: It took us more than one read to get the full request.
       cli_read_ts = timestamp
       num_cli_read += 1
@@ -567,8 +596,10 @@ def straceprof(input, options):
 
     # If we write to the client socket, we're responding to the query.
     if (client_fd is not None
-        and syscall == "writev"  # It seems Apache only uses writev.
-        and call.startswith("writev(%d," % client_fd)):
+        and ((syscall == "writev"  # It seems Apache only uses writev.
+              and call.startswith("writev(%d," % client_fd))
+             or (syscall == "write"
+                 and call.startswith("write(%d" % client_fd)))):
       if not first_write_ts:
         first_write_ts = timestamp
       cli_write_ts = timestamp
@@ -581,7 +612,7 @@ def straceprof(input, options):
       fd = int(line[24:line.index(")", 25)])
       if fd == client_fd:
         closed_cli = True
-        assert first_write_ts
+        assert first_write_ts, "FD to client closed without writing to it " + line
         client_fd = None
       else:
         if fd in known_fds:
@@ -789,7 +820,7 @@ def getopt(argv):
   parser = parser = OptionParser(description=__doc__)
   parser.add_option("-f", "--find-worker", dest="find_worker",
                     default=False, action="store_true",
-                    help="Find a random Apache worker to strace.")
+                    help="Find a random worker to strace.")
   parser.add_option("-g", "--grep", dest="grep", default=None,
                     metavar="RE", help="Only report requests for HTTP"
                     " resources that match this regexp.")
@@ -806,6 +837,13 @@ def getopt(argv):
                     type="int", metavar="NUM", help="Stop after this many requests.")
   parser.add_option("-p", "--pid", dest="pid", default=None,
                     type="int", metavar="PID", help="Run strace on this pid.")
+  parser.add_option("--pgrep-args", dest="pgrep_args",
+                    default=False, action="store_true",
+                    help="When using pgrep, also match process arguments"
+                    " (default: %default).")
+  parser.add_option("--process-name", dest="process_name", default="apache2",
+                    metavar="RE", help="For use with -f/--find-worker, what"
+                    " regexp to use with pgrep (default: %default).")
   parser.add_option("-s", "--server", dest="server", default=None,
                     metavar="HOST:PORT", help="Droopy server to send the traces"
                     " to, for storage in ElasticSearch (implies -j)"
@@ -826,9 +864,9 @@ def getopt(argv):
   parser.add_option("-t", "--top", dest="top", default=1,
                     type="int", metavar="NUM",
                     help="Print the top NUM system calls (default: %default).")
-  parser.add_option("-u", "--apache-user", dest="user", default="www-data",
+  parser.add_option("-u", "--apache-user", dest="user", default=None,
                     metavar="USER", help="Username under which Apache workers"
-                    " run (default: %default).")
+                    " run (default: %s)." % DEFAULT_USER)
   parser.add_option("-B", "--show-backend-time", dest="show_backend_times",
                     default=False, action="store_true",
                     help="Show time spent interacting with each backend"
@@ -836,6 +874,9 @@ def getopt(argv):
   parser.add_option("-C", "--show-connect", dest="show_connect",
                     default=False, action="store_true",
                     help="Show connect() system calls (default: %default).")
+  parser.add_option("-G", "--gearman", dest="gearman",
+                    default=False, action="store_true",
+                    help="Slice requests of gearman worker (default: %default).")
   parser.add_option("-L", "--lsof-deadline", dest="lsof_deadline", default=3,
                     type="float", metavar="SEC", help="Spend only up to this"
                     " many seconds finding pre-existing TCP connections"
@@ -867,13 +908,18 @@ def getopt(argv):
     parser.error("--server-queue-size must be strictly positive")
   elif options.server_size_threshold <= 0:
     parser.error("--server-size-threshold must be strictly positive")
+  if options.user is None:
+    if options.gearman:
+      options.user = GEARMAN_DEFAULT_USER
+    else:
+      options.user = DEFAULT_USER
   if options.pid is not None:
     if options.pid <= 1:
       parser.error("--pid must have a value strictly greater than 1")
     elif options.find_worker:
       parser.error("--find-worker and --pid are mutually exclusive")
   elif options.find_worker:
-    options.pid = find_apache_worker(options)
+    options.pid = find_worker(options)
   if options.show_backend_reqs:
     options.show_backend_times = True
   if options.server is not None:
