@@ -516,7 +516,7 @@ def straceprof(input, options):
     elif (options.gearman and syscall == "connect"
           and parse_connect(line)[1] == 7003):
       client_fd = parse_fd(call, syscall)
-    elif not client_fd:
+    elif client_fd is None:
       continue  # We don't know who we're talking to, skip until we do.
     else:
       if syscall in TRACK_FD_SYSCALLS:
