@@ -686,8 +686,10 @@ def jsonify_syscall(duration, name, retv, call, ts=None):
 
 PORT2SERVICE = {
   25:    "smtp",
+  53:    "dns",
   80:    "http",
   443:   "https",
+  7003:  "gearmand",
   9090:  "thrift_hbase",
   9200:  "esearch",
 }
