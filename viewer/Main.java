@@ -72,7 +72,7 @@ import static viewer.Json.object;
  */
 final class Main implements EntryPoint {
 
-  private static final DateTimeFormat FULLDATE =
+  static final DateTimeFormat FULLDATE =
     DateTimeFormat.getFormat("yyyy/MM/dd-HH:mm:ss");
 
   private static final DateTimeFormat INDEXDATE =

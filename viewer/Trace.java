@@ -90,6 +90,7 @@ public final class Trace extends JavaScriptObject {
   private final class TraceWidget extends AlignedTree {
     TraceWidget(final Summary summary) {
       super.setWidth("100%");
+      super.addItem(row("Request time: " + summary.readableTime()));
       if (readTime() > 0.1) {
         super.addRow("Request size: ", reqSize() + " bytes",
                      "read in " + plural(numCliRead(), "chunk"),

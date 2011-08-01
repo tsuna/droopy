@@ -12,6 +12,8 @@
 // see <http://www.gnu.org/licenses/>.
 package viewer;
 
+import java.util.Date;
+
 import com.google.gwt.core.client.JavaScriptObject;
 import com.google.gwt.core.client.JsArray;
 import com.google.gwt.i18n.client.NumberFormat;
@@ -27,6 +29,8 @@ public final class Summary extends JavaScriptObject {
   protected Summary() {
   }
 
+  /** Timestamp of the request in milliseconds, with microseconds precision. */
+  public native double requestTs() /*-{ return this.request_ts }-*/;
   public native String method() /*-{ return this.method }-*/;
   public native String resource() /*-{ return this.resource }-*/;
   public native double endToEnd() /*-{ return this.end_to_end }-*/;
@@ -54,6 +58,12 @@ public final class Summary extends JavaScriptObject {
 
   public boolean hasSlowBackend() {
     return slowestBackend() != null;
+  }
+
+  /** Return a human readable version of {@link #requestTs}.  */
+  public String readableTime() {
+    final long ts = (long) requestTs();  // Cast to int to drop the microseconds.
+    return Main.FULLDATE.format(new Date(ts));
   }
 
   /** Returns the widget associated with this summary.  */
