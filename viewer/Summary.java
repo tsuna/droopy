@@ -32,17 +32,7 @@ public final class Summary extends JavaScriptObject {
   public native double endToEnd() /*-{ return this.end_to_end }-*/;
   public native int numSyscalls() /*-{ return this.num_syscalls }-*/;
   public native Syscall slowestSyscall() /*-{ return this.slowest_syscall }-*/;
-  // Due on an unfortunate typo in the Python tracer, some traces have
-  // prev_slowest as a one-element list instead of a just a normal Syscall
-  // object.  You'd surprised as how tricky it is to tell whether something
-  // is an array in JavaScript.  I rely on duck typing here: if it's got a
-  // "sort" function, then it's an array, otherwise it's an object.
-  public native Syscall prevSlowest() /*-{
-    if (this.prev_slowest == undefined) {
-      return null;
-    }
-    return typeof this.prev_slowest.sort == "function" ? this.prev_slowest[0] : this.prev_slowest
-  }-*/;
+  public native Syscall prevSlowest() /*-{ return this.prev_slowest }-*/;
   public native ConnectCall prevConnect() /*-{ return this.prev_connect }-*/;
   public native boolean apacheClosed() /*-{ return this.apache_closed }-*/;
 
