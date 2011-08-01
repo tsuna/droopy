@@ -50,6 +50,7 @@ import com.google.gwt.user.client.ui.Button;
 import com.google.gwt.user.client.ui.CheckBox;
 import com.google.gwt.user.client.ui.HorizontalPanel;
 import com.google.gwt.user.client.ui.InlineLabel;
+import com.google.gwt.user.client.ui.ListBox;
 import com.google.gwt.user.client.ui.RootPanel;
 import com.google.gwt.user.client.ui.TextBox;
 import com.google.gwt.user.client.ui.Tree;
@@ -93,6 +94,7 @@ final class Main implements EntryPoint {
   private final DateTimeBox start_datebox = new DateTimeBox();
   private final DateTimeBox end_datebox = new DateTimeBox();
   private final TextBox esquery = new TextBox();
+  private final ListBox sortby = new ListBox();
 
   private abstract class AjaxCallback implements RequestCallback/*AsyncCallback<JavaScriptObject>*/ {
     public void onError(final Request req, final Throwable e) {
@@ -269,6 +271,12 @@ final class Main implements EntryPoint {
     hbox.add(end_datebox);
     hbox.add(new InlineLabel("Query"));
     hbox.add(esquery);
+    hbox.add(new InlineLabel("Sort by"));
+    sortby.addItem("Request timestamp", "request_ts");  // 1st is default.
+    sortby.addItem("End-to-end latency", "end_to_end");
+    sortby.addItem("Slowest system call", "slowest_syscall.duration");
+    sortby.addItem("Number of system calls", "num_syscalls");
+    hbox.add(sortby);
     root.add(hbox);
     traces.setAnimationEnabled(true);
     root.add(traces);
@@ -295,6 +303,7 @@ final class Main implements EntryPoint {
       end_datebox.addValueChangeHandler(vch);
     }
     esquery.addKeyPressHandler(refresh);
+    sortby.addChangeHandler(refresh);
   }
 
   private void setupHistory() {
@@ -304,7 +313,19 @@ final class Main implements EntryPoint {
         setTextBox(start_datebox.getTextBox(), params.get("start"));
         setTextBox(end_datebox.getTextBox(), params.get("end"));
         setTextBox(esquery, params.get("q"));
-        List<String> value;
+        List<String> value = params.get("sort");
+        if (value != null) {
+          final String sort = value.get(0);
+          final int n = sortby.getItemCount();
+          for (int i = 0; i < n; i++) {
+            if (sortby.getValue(i).equals(sort)) {
+              sortby.setSelectedIndex(i);
+              break;
+            }
+          }
+        } else {
+          sortby.setSelectedIndex(0);  // Pick the 1st item as the default.
+        }
         if ((value = params.get("results")) != null) {
           short n;
           try {
@@ -350,6 +371,12 @@ final class Main implements EntryPoint {
     if (end != null) {
       token.append("&end=").append(FULLDATE.format(end));
     }
+    // The 1st item is the default, so only put it in the URL if we picked the
+    // non-default (index > 0).  If index is < 0, then nothing is selected, so
+    // use the default too.
+    if (sortby.getSelectedIndex() > 0) {
+      token.append("&sort=").append(sortby.getValue(sortby.getSelectedIndex()));
+    }
     if (!esquery.getValue().isEmpty()) {
       token.append("&q=").append(esquery.getValue());
     }
@@ -366,7 +393,7 @@ final class Main implements EntryPoint {
     final String json = object()
       .add("size", nresults)
       .add("sort", Json.array()
-           .add("request_ts", object("order", "desc")))
+           .add(sortby.getValue(sortby.getSelectedIndex()), object("order", "desc")))
       .add("query",
            object("filtered", object("query", getESQuery())
                   .add("filter",
