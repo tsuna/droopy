@@ -383,6 +383,37 @@ final class Main implements EntryPoint {
     History.newItem(token.toString());
   }
 
+  /**
+   * Returns the indices to search for the current date range.
+   * For instance "/droopy201106,"
+   */
+  private String indicesToSearch() {
+    final Date from = start_datebox.getValue();
+    final Date to = end_datebox.getValue() != null ? end_datebox.getValue() : new Date();
+    final int y1 = 1900 + from.getYear();    // Start year
+    final int m1 = 1 + from.getMonth();          // Start month
+    final int y2 = 1900 + to.getYear();      // End year
+    final int m2 = 1 + to.getMonth();            // End month
+    final StringBuilder buf = new StringBuilder(8 * (y2 * 12 + m2 - y1 * 12 - m1));
+    buf.append("/");
+    int start_month = m1;
+    for (int y = y1; y <= y2; y++) {  // Use `<=' to loop at least once.
+      // If we're on the last year, stop at the end month, otherwise go
+      // through all the months until the end of the year.
+      final int end_month = y == y2 ? m2 : 12;
+      for (int m = start_month; m <= end_month; m++) {
+        buf.append("droopy").append(y);
+        if (m < 10) {
+          buf.append('0');  // Padding for values less than 10.
+        }
+        buf.append(m).append(',');
+      }
+      start_month = 1;
+    }
+    buf.setLength(buf.length() - 1);  // Remove the last `,'
+    return buf.toString();
+  }
+
   private void loadTraces() {
     status.setText("Loading...");
     final Json request_ts = object()
@@ -411,7 +442,7 @@ final class Main implements EntryPoint {
            //                        object("field", "end_to_end").add("interval", 30)))
           )
       .toString();
-    ajax("/droopy/summary/_search", json,
+    ajax(indicesToSearch() + "/summary/_search", json,
           new AjaxCallback() {
       public void onSuccess(final JSONValue response) {
         final ESResponse<Summary> resp = ESResponse.fromJson(response.isObject());
@@ -538,11 +569,12 @@ final class Main implements EntryPoint {
     traces.clear();
     final HashSet<String> expanded = new HashSet(getHistoryTokens("trace"));
     for (final ESResponse.Hit<Summary> hit : summaries.iterator()) {
+      final String index = hit.index();
       final String id = hit.id();
       final Summary summary = hit.source();
       final TreeItem trace = new LazyTreeItem(summary.widget()) {
         protected void onFirstOpen() {
-          expandTrace(this, id, summary);
+          expandTrace(this, index, id, summary);
           onOpen();
         }
         protected void onOpen() {
@@ -576,9 +608,10 @@ final class Main implements EntryPoint {
     }
   }
 
-  private void expandTrace(final TreeItem parent, final String traceid,
+  private void expandTrace(final TreeItem parent,
+                           final String index, final String traceid,
                            final Summary summary) {
-    ajax("/droopy/trace/" + traceid, new AjaxCallback() {
+    ajax('/' + index + "/trace/" + traceid, new AjaxCallback() {
       public void onSuccess(final JSONValue response) {
         final ESResponse.Hit<Trace> hit = ESResponse.Hit.fromJson(response.isObject());
         parent.removeItems();
