@@ -689,6 +689,7 @@ PORT2SERVICE = {
   53:    "dns",
   80:    "http",
   443:   "https",
+  3306:  "mysql",
   7003:  "gearmand",
   9090:  "thrift_hbase",
   9200:  "esearch",
