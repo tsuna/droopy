@@ -746,9 +746,9 @@ def upload_thread(server, options):
   nitems = 0  # How many items are we sending to ES.
   batch_bytes = 0  # Total size of the items.
   # Actions to use to index data through ElasticSearch's /_bulk interface.
-  index_summary = {"index": {"_index": "droopy", "_type": "summary", "_id": None}}
-  index_trace = {"index": {"_index": "droopy", "_type": "trace", "_id": None}}
-  index_fulltrace = {"index": {"_index": "droopy", "_type": "fulltrace", "_id": None}}
+  index_summary = {"index": {"_index": options.index, "_type": "summary", "_id": None}}
+  index_trace = {"index": {"_index": options.index, "_type": "trace", "_id": None}}
+  index_fulltrace = {"index": {"_index": options.index, "_type": "fulltrace", "_id": None}}
   width = len(str(options.server_batch))
   while True:
     trace = TRACEQ.get()
@@ -853,6 +853,9 @@ def getopt(argv):
                     metavar="HOST:PORT", help="Droopy server to send the traces"
                     " to, for storage in ElasticSearch (implies -j)"
                     " (default: off).")
+  parser.add_option("-I", "--index", dest="index", default="droopy",
+                    metavar="NAME", help="ElasticSearch index name to use"
+                    " (default: %default).")
   parser.add_option("--server-timeout", dest="server_timeout", default=3.0,
                     metavar="SEC", type="float", help="Timeout when talking to"
                     " the --server (default: %default).")
@@ -931,6 +934,8 @@ def getopt(argv):
     options.server_size_threshold <<= 10  # Convert KB -> bytes.
     if options.server_timeout <= 0:
       parser.error("--server-timeout must be positive")
+    if not options.index:
+      parser.error("--index is required with --server")
     try:
       host, port = options.server.split(":")
     except ValueError:
