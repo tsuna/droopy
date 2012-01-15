@@ -612,7 +612,8 @@ def straceprof(input, options):
       fd = int(line[24:line.index(")", 25)])
       if fd == client_fd:
         closed_cli = True
-        assert first_write_ts, "FD to client closed without writing to it " + line
+        assert first_write_ts or request == "(invalid request)", \
+          "FD to client closed without writing to it " + line
         client_fd = None
       else:
         if fd in known_fds:
