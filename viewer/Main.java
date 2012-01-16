@@ -83,7 +83,10 @@ final class Main implements EntryPoint {
   private static final short MAX_RESULTS = 200;
   private static final short DEFAULT_RESULTS = 20;
 
+  /** ip:port of the ES server to talk to.  */
   private String server;
+  /** Base name of the ES index to use, typically an alias name.  */
+  private String indexname;
 
   private final VerticalPanel root = new VerticalPanel();
   private final InlineLabel status = new InlineLabel();
@@ -140,12 +143,13 @@ final class Main implements EntryPoint {
   }
 
   /** Returns the name of the index for this month.  */
-  private static String currentIndexName() {
-    return "droopy" + INDEXDATE.format(new Date());
+  private String currentIndexName() {
+    return indexname + "-" + INDEXDATE.format(new Date());
   }
 
   private void onModuleLoadReal() {
     server = getServer();
+    indexname = getIndexName();
     if (server == null) {
       promptForServerUi();
       return;
@@ -155,7 +159,7 @@ final class Main implements EntryPoint {
     root.add(charts);
     removeLoadingMessage();
     RootPanel.get().add(root);
-    ajax("/droopy/_status", new AjaxCallback() {
+    ajax("/" + indexname + "/_status", new AjaxCallback() {
       public void onSuccess(final JSONValue response) {
         final JSONObject resp = response.isObject();
         if (resp.containsKey("ok")
@@ -192,6 +196,14 @@ final class Main implements EntryPoint {
     return "http://" + server;
   }
 
+  private static String getIndexName() {
+    final String index = Window.Location.getParameter("index");
+    if (index == null || index.isEmpty()) {
+      return "droopy";  // Default.
+    }
+    return index;
+  }
+
   private void promptForServerUi() {
     final VerticalPanel vbox = new VerticalPanel();
     vbox.add(new InlineLabel("I need to know the address of the ElasticSearch"
@@ -201,10 +213,20 @@ final class Main implements EntryPoint {
     hbox.add(new InlineLabel("Address (host:port):"));
     final ValidatedTextBox textbox = new ValidatedTextBox();
     textbox.setValidationRegexp("^[-_.a-zA-Z0-9]+:[1-9][0-9]*$");
-    final EventsHandler setsrv = new EventsHandler() {
-      protected <H extends EventHandler> void onEvent(final DomEvent<H> event) {
+    hbox.add(textbox);
+    hbox.add(new InlineLabel("Index name:"));
+    final ValidatedTextBox indexbox = new ValidatedTextBox();
+    indexbox.setValue(getIndexName());
+    indexbox.setValidationRegexp("^[-_.a-zA-Z0-9]+$");
+    hbox.add(indexbox);
+    hbox.add(new Button("Go!", new ClickHandler() {
+      public void onClick(final ClickEvent event) {
         final String srv = textbox.getValue();
         if (srv == null || srv.isEmpty()) {
+          return;
+        }
+        final String index = indexbox.getValue();
+        if (index == null || index.isEmpty()) {
           return;
         }
         final StringBuilder url = new StringBuilder();
@@ -216,16 +238,14 @@ final class Main implements EntryPoint {
           url.append("?srv=");
         }
         url.append(srv);
+        url.append("&index=").append(index);
         tmp = Window.Location.getHash();
         if (tmp != null && !tmp.isEmpty()) {
           url.append(tmp);
         }
         Window.Location.assign(url.toString());
       }
-    };
-    textbox.addBlurHandler(setsrv);
-    textbox.addKeyPressHandler(setsrv);
-    hbox.add(textbox);
+    }));
     vbox.add(hbox);
     root.add(vbox);
     removeLoadingMessage();
@@ -402,7 +422,7 @@ final class Main implements EntryPoint {
       // through all the months until the end of the year.
       final int end_month = y == y2 ? m2 : 12;
       for (int m = start_month; m <= end_month; m++) {
-        buf.append("droopy").append(y);
+        buf.append(indexname).append('-').append(y);
         if (m < 10) {
           buf.append('0');  // Padding for values less than 10.
         }
