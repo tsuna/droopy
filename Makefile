@@ -42,7 +42,7 @@ viewer_DEPENDENCIES = viewer.gwt.xml
 dist_pkgdata_DATA = \
 	viewer/index.html	\
 
-GWT_VERSION = 2.3.0
+GWT_VERSION = 2.4.0
 GWT_DEV = third_party/gwt/gwt-dev-$(GWT_VERSION).jar
 GWT_SDK = third_party/gwt/gwt-user-$(GWT_VERSION).jar
 GWT_DEPS = third_party/gwt/gwt-servlet-deps-$(GWT_VERSION).jar
@@ -92,5 +92,8 @@ clean:
 
 distclean: clean
 	test ! -d $(top_builddir) || rmdir $(top_builddir)
+
+$(GWT_SDK) $(GWT_DEV):
+	wget http://opentsdb.googlecode.com/files/`basename $@` -O $@
 
 .PHONY: all clean distclean gwtc gwtdev staticroot viewer
