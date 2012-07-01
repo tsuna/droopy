@@ -704,7 +704,7 @@ def get_host_type(host, port):
   if host.startswith("10."):
     return port
   elif host.startswith("127."):
-    return "localhost_%" % port
+    return "localhost_%s" % port
   else:  # Connection out to the intertubes.
     return "external_%s" % port
 
