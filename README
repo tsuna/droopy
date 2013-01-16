@@ -4,10 +4,12 @@ It essentially consists in two parts:
     and can upload them to ElasticSearch.
   - A viewer that provides a UI to dig in the data stored in ElasticSearch.
 
-Droopy was designed to work on PHP applications running under Apache, but
-it also works on any other application server that uses the pathetic "one
-process per connection" or "one thread per connection" model (which really
-is something from the 90s and shouldn't exist anymore, but still does).
+Droopy was designed to work on PHP applications running under Apache, but it
+also works on any other application server that uses "one process per
+connection" or "one thread per connection" model.  Many popular web application
+frameworks (e.g. Ruby on Rails, Django, and all PHP frameworks) employ this
+model.  As long as the application is not event driven, Droopy will be able to
+collate the system calls and match it to the request.
 
 It's a "profiler of the last chance" because it really is a poor man's
 solution to doing profiling and it has a non-negligible overhead.  It's
